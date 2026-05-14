@@ -83,7 +83,10 @@ def cmd_start(port: int, custom_db: Path | None = None):
         time.sleep(0.3)
 
     # Start bash in tmux, then run shelley inside it
-    cmd = f"{binary} --config {CONFIG} --db {db} serve --port {port}"
+    # --socket none disables the local CLI-client Unix socket. With many
+    # demo instances around we'd otherwise exhaust the 10 fallback slots
+    # under ~/.config/shelley/ and the server would refuse to start.
+    cmd = f"{binary} --config {CONFIG} --db {db} serve --port {port} --socket none"
     print(f"Starting demo server on port {port} (tmux session '{sess}') ...")
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", sess, "bash", "-c", cmd],
