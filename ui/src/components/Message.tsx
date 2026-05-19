@@ -473,22 +473,6 @@ const Message = React.memo(function Message({
         return false;
       }
     })();
-  // TL;DR: a 1-2 sentence summary attached to long end-of-turn agent
-  // messages. Stored in user_data.tldr by the server's tldr.go.
-  const tldr: string | null = (() => {
-    if (message.type !== "agent" || !message.user_data) return null;
-    try {
-      const ud =
-        typeof message.user_data === "string" ? JSON.parse(message.user_data) : message.user_data;
-      if (ud && typeof ud.tldr === "string" && ud.tldr.trim()) {
-        return ud.tldr.trim();
-      }
-    } catch {
-      /* ignore */
-    }
-    return null;
-  })();
-
   const [showDistillationEditor, setShowDistillationEditor] = useState(false);
   const [distillationContentOverride, setDistillationContentOverride] = useState<string | null>(
     null,
@@ -1277,12 +1261,6 @@ const Message = React.memo(function Message({
             contentToRender.map((content, index) => (
               <div key={index}>{renderContent(content)}</div>
             ))}
-          {tldr && (
-            <div className="msg-tldr" data-testid="message-tldr">
-              <span className="msg-tldr-label">TL;DR</span>
-              <span className="msg-tldr-body">{tldr}</span>
-            </div>
-          )}
           {isQueued && (
             <div className="queued-message-badge" data-testid="queued-badge">
               <span className="queued-message-badge-label">

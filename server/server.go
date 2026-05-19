@@ -1234,10 +1234,6 @@ func (s *Server) publishConversationState(state ConversationState) {
 			for _, hook := range hooks {
 				go s.sendEndOfTurnHook(context.Background(), hook, event)
 			}
-			// TL;DR generation is a new feature, currently disabled.
-			// Keep the implementation around in server/tldr.go; re-enable
-			// by uncommenting the line below.
-			// go s.maybeGenerateEndOfTurnTLDR(context.Background(), state.ConversationID)
 			go RunEndOfTurnHook(EndOfTurnHookInput{
 				Type:            "end_of_turn",
 				ConversationID:  event.ConversationID,
