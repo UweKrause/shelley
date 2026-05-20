@@ -68,6 +68,28 @@ interface MessageInputProps {
 
 const PERSIST_KEY_PREFIX = "shelley_draft_";
 
+function draftStorageKey(persistKey: string): string {
+  return PERSIST_KEY_PREFIX + persistKey;
+}
+
+function draftUpdatedAtStorageKey(persistKey: string): string {
+  return draftStorageKey(persistKey) + "_updated_at";
+}
+
+function notifyDraftChanged(persistKey: string, value: string): void {
+  window.dispatchEvent(
+    new CustomEvent("shelley-draft-changed", {
+      detail: { key: persistKey, value },
+    }),
+  );
+}
+
+function clearPersistedDraft(persistKey: string): void {
+  localStorage.removeItem(draftStorageKey(persistKey));
+  localStorage.removeItem(draftUpdatedAtStorageKey(persistKey));
+  notifyDraftChanged(persistKey, "");
+}
+
 interface Attachment {
   id: string;
   name: string;
@@ -99,7 +121,7 @@ function MessageInput({
   const [message, setMessage] = useState(() => {
     // Load persisted draft if persistKey is set
     if (persistKey) {
-      return localStorage.getItem(PERSIST_KEY_PREFIX + persistKey) || "";
+      return localStorage.getItem(draftStorageKey(persistKey)) || "";
     }
     return "";
   });
@@ -441,7 +463,7 @@ function MessageInput({
         setMessage("");
         clearAttachments();
         if (persistKey) {
-          localStorage.removeItem(PERSIST_KEY_PREFIX + persistKey);
+          clearPersistedDraft(persistKey);
         }
         try {
           await onQueue(messageToQueue);
@@ -460,7 +482,7 @@ function MessageInput({
         clearAttachments();
         // Clear persisted draft on successful send
         if (persistKey) {
-          localStorage.removeItem(PERSIST_KEY_PREFIX + persistKey);
+          clearPersistedDraft(persistKey);
         }
       } catch {
         // Keep the message on error so user can retry
@@ -479,7 +501,7 @@ function MessageInput({
       setMessage("");
       clearAttachments();
       if (persistKey) {
-        localStorage.removeItem(PERSIST_KEY_PREFIX + persistKey);
+        clearPersistedDraft(persistKey);
       }
       setShowQueueMenu(false);
       try {
@@ -501,7 +523,7 @@ function MessageInput({
       setMessage("");
       clearAttachments();
       if (persistKey) {
-        localStorage.removeItem(PERSIST_KEY_PREFIX + persistKey);
+        clearPersistedDraft(persistKey);
       }
       setShowQueueMenu(false);
       setSubmitting(true);
@@ -562,22 +584,18 @@ function MessageInput({
   // a real timestamp in its meta row (same as actual conversations).
   useEffect(() => {
     if (persistKey) {
-      const tsKey = PERSIST_KEY_PREFIX + persistKey + "_updated_at";
+      const tsKey = draftUpdatedAtStorageKey(persistKey);
       if (message) {
-        localStorage.setItem(PERSIST_KEY_PREFIX + persistKey, message);
+        localStorage.setItem(draftStorageKey(persistKey), message);
         localStorage.setItem(tsKey, new Date().toISOString());
       } else {
-        localStorage.removeItem(PERSIST_KEY_PREFIX + persistKey);
+        localStorage.removeItem(draftStorageKey(persistKey));
         localStorage.removeItem(tsKey);
       }
       // Notify listeners (e.g. ConversationDrawer's draft entry) so they can
       // refresh without polling. localStorage's 'storage' event only fires
       // cross-tab, hence this custom event for same-tab updates.
-      window.dispatchEvent(
-        new CustomEvent("shelley-draft-changed", {
-          detail: { key: persistKey, value: message },
-        }),
-      );
+      notifyDraftChanged(persistKey, message);
     }
   }, [message, persistKey]);
 
