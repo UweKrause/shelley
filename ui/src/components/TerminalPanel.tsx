@@ -734,6 +734,10 @@ function TerminalInstanceWithRegistry({
           onAttached?.(term.id, msg.term_id);
         } else if (msg.type === "exit") {
           const code = parseInt(msg.data, 10) || 0;
+          const color = code === 0 ? "32" : "31";
+          xterm.write(
+            `\r\n\x1b[2;${color}m${term.command} completed with exit code ${code}\x1b[0m\r\n`,
+          );
           onStatusChange(term.id, "exited", code);
         } else if (msg.type === "error") {
           xterm.write(`\r\n\x1b[31mError: ${msg.data}\x1b[0m\r\n`);
