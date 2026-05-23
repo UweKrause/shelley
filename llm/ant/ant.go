@@ -76,6 +76,8 @@ func ClaudeModelName(userName string) string {
 	}
 }
 
+func (s *Service) Provider() string { return "anthropic" }
+
 // TokenContextWindow returns the maximum token context window size for this service
 func (s *Service) TokenContextWindow() int {
 	return 200000
@@ -184,6 +186,17 @@ type content struct {
 	EndTime   *time.Time `json:"-"`
 
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+
+	// Server-side tool fields (Anthropic web search)
+	Caller    json.RawMessage `json:"caller,omitempty"`
+	Citations json.RawMessage `json:"citations,omitempty"`
+
+	// Web search result fields
+	Title            string `json:"title,omitempty"`
+	URL              string `json:"url,omitempty"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+	PageAge          string `json:"page_age,omitempty"`
+	EncryptedIndex   string `json:"encrypted_index,omitempty"`
 }
 
 // message represents a message in the conversation.
@@ -317,11 +330,14 @@ var (
 	toLLMRole = inverted(fromLLMRole)
 
 	fromLLMContentType = map[llm.ContentType]string{
-		llm.ContentTypeText:             "text",
-		llm.ContentTypeThinking:         "thinking",
-		llm.ContentTypeRedactedThinking: "redacted_thinking",
-		llm.ContentTypeToolUse:          "tool_use",
-		llm.ContentTypeToolResult:       "tool_result",
+		llm.ContentTypeText:                "text",
+		llm.ContentTypeThinking:            "thinking",
+		llm.ContentTypeRedactedThinking:    "redacted_thinking",
+		llm.ContentTypeToolUse:             "tool_use",
+		llm.ContentTypeToolResult:          "tool_result",
+		llm.ContentTypeServerToolUse:       "server_tool_use",
+		llm.ContentTypeWebSearchToolResult: "web_search_tool_result",
+		llm.ContentTypeWebSearchResult:     "web_search_result",
 	}
 	toLLMContentType = inverted(fromLLMContentType)
 
@@ -338,6 +354,7 @@ var (
 		"end_turn":      llm.StopReasonEndTurn,
 		"tool_use":      llm.StopReasonToolUse,
 		"refusal":       llm.StopReasonRefusal,
+		"pause_turn":    llm.StopReasonToolUse, // server-side tool execution, model will continue
 	}
 )
 
@@ -401,6 +418,25 @@ func fromLLMContent(c llm.Content) content {
 		d.ToolUseID = c.ToolUseID
 		d.ToolError = c.ToolError
 		d.ToolResult = toolResult
+	case llm.ContentTypeServerToolUse:
+		d.ID = c.ID
+		d.ToolName = c.ToolName
+		d.ToolInput = c.ToolInput
+		d.Caller = c.Caller
+	case llm.ContentTypeWebSearchToolResult:
+		d.ToolUseID = c.ToolUseID
+		d.ToolResult = toolResult
+	case llm.ContentTypeWebSearchResult:
+		d.Title = c.Title
+		d.URL = c.URL
+		d.EncryptedContent = c.EncryptedContent
+		d.PageAge = c.PageAge
+		d.EncryptedIndex = c.EncryptedIndex
+	}
+
+	// Citations live on text blocks (per Anthropic's wire format).
+	if c.Type == llm.ContentTypeText && len(c.Citations) > 0 {
+		d.Citations = c.Citations
 	}
 
 	return d
@@ -612,16 +648,23 @@ func toLLMContent(c content) llm.Content {
 	}
 
 	ret := llm.Content{
-		ID:         c.ID,
-		Type:       toLLMContentType[c.Type],
-		MediaType:  c.MediaType,
-		Data:       c.Data,
-		Signature:  c.Signature,
-		ToolName:   c.ToolName,
-		ToolInput:  c.ToolInput,
-		ToolUseID:  c.ToolUseID,
-		ToolError:  c.ToolError,
-		ToolResult: toolResultContents,
+		ID:               c.ID,
+		Type:             toLLMContentType[c.Type],
+		MediaType:        c.MediaType,
+		Data:             c.Data,
+		Signature:        c.Signature,
+		ToolName:         c.ToolName,
+		ToolInput:        c.ToolInput,
+		ToolUseID:        c.ToolUseID,
+		ToolError:        c.ToolError,
+		ToolResult:       toolResultContents,
+		Caller:           c.Caller,
+		Citations:        c.Citations,
+		Title:            c.Title,
+		URL:              c.URL,
+		EncryptedContent: c.EncryptedContent,
+		PageAge:          c.PageAge,
+		EncryptedIndex:   c.EncryptedIndex,
 	}
 	if c.Text != nil {
 		ret.Text = *c.Text
@@ -818,9 +861,9 @@ func parseSSEStream(r io.Reader, onStream func(llm.StreamDelta)) (*response, err
 				contents = append(contents, content{})
 			}
 			block := *event.ContentBlock
-			// For tool_use blocks, the initial input is always empty {};
-			// clear it so delta accumulation starts fresh.
-			if block.Type == "tool_use" {
+			// For tool_use and server_tool_use blocks, the initial input is
+			// always empty {}; clear it so delta accumulation starts fresh.
+			if block.Type == "tool_use" || block.Type == "server_tool_use" {
 				block.ToolInput = nil
 			}
 			contents[event.Index] = block

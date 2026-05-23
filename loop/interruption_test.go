@@ -339,6 +339,8 @@ func (s *customPredictableService) GetDefaultModel() string {
 	return "custom-test"
 }
 
+func (s *customPredictableService) Provider() string { return "" }
+
 func (s *customPredictableService) TokenContextWindow() int {
 	return 100000
 }

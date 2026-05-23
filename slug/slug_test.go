@@ -84,6 +84,8 @@ func (m *MockLLMService) Do(ctx context.Context, req *llm.Request) (*llm.Respons
 	}, nil
 }
 
+func (m *MockLLMService) Provider() string { return "" }
+
 func (m *MockLLMService) TokenContextWindow() int {
 	return 8192 // Mock token limit
 }
@@ -253,6 +255,8 @@ func (m *MockLLMServiceWithError) Do(ctx context.Context, req *llm.Request) (*ll
 	return nil, fmt.Errorf("LLM service error")
 }
 
+func (m *MockLLMServiceWithError) Provider() string { return "" }
+
 func (m *MockLLMServiceWithError) TokenContextWindow() int {
 	return 8192
 }
@@ -372,6 +376,8 @@ func (m *MockLLMServiceEmptyResponse) Do(ctx context.Context, req *llm.Request) 
 		Content: []llm.Content{},
 	}, nil
 }
+
+func (m *MockLLMServiceEmptyResponse) Provider() string { return "" }
 
 func (m *MockLLMServiceEmptyResponse) TokenContextWindow() int {
 	return 8192

@@ -327,13 +327,14 @@ var (
 // Service provides chat completions.
 // Fields should not be altered concurrently with calling any method on Service.
 type Service struct {
-	HTTPC     *http.Client    // defaults to http.DefaultClient if nil
-	APIKey    string          // optional, if not set will try to load from env var
-	Model     Model           // defaults to DefaultModel if zero value
-	ModelURL  string          // optional, overrides Model.URL
-	MaxTokens int             // defaults to DefaultMaxTokens if zero
-	Org       string          // optional - organization ID
-	Backoff   []time.Duration // retry backoff durations; defaults to {1s, 2s, 5s, 10s, 15s} if nil
+	HTTPC        *http.Client    // defaults to http.DefaultClient if nil
+	APIKey       string          // optional, if not set will try to load from env var
+	Model        Model           // defaults to DefaultModel if zero value
+	ModelURL     string          // optional, overrides Model.URL
+	MaxTokens    int             // defaults to DefaultMaxTokens if zero
+	ProviderName string          // e.g., "openai", "fireworks"
+	Org          string          // optional - organization ID
+	Backoff      []time.Duration // retry backoff durations; defaults to {1s, 2s, 5s, 10s, 15s} if nil
 }
 
 var _ llm.Service = (*Service)(nil)
@@ -516,6 +517,9 @@ func fromLLMMessage(msg llm.Message) []openai.ChatCompletionMessage {
 	var toolResults []llm.Content
 
 	for _, c := range msg.Content {
+		if llm.IsServerSideContentType(c.Type) {
+			continue // skip provider-specific server-side content blocks
+		}
 		if c.Type == llm.ContentTypeToolResult {
 			toolResults = append(toolResults, c)
 		} else {
@@ -803,6 +807,8 @@ func toStopReason(reason string) llm.StopReason {
 	return llm.StopReasonStopSequence // Default
 }
 
+func (s *Service) Provider() string { return s.ProviderName }
+
 // TokenContextWindow returns the maximum token context window size for this service
 func (s *Service) TokenContextWindow() int {
 	// TODO: move TokenContextWindow information to Model struct
@@ -881,9 +887,12 @@ func (s *Service) Do(ctx context.Context, ir *llm.Request) (*llm.Response, error
 		allMessages = append(allMessages, msgs...)
 	}
 
-	// Convert tools
+	// Convert tools, skipping provider-specific server-side tools
 	var tools []openai.Tool
 	for _, t := range ir.Tools {
+		if t.ServerSide {
+			continue
+		}
 		tools = append(tools, fromLLMTool(t))
 	}
 

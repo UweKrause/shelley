@@ -21,6 +21,8 @@ func (m *mockService) Do(ctx context.Context, req *Request) (*Response, error) {
 	return &Response{}, nil
 }
 
+func (m *mockService) Provider() string { return "" }
+
 func (m *mockService) TokenContextWindow() int {
 	return m.tokenContextWindow
 }
@@ -613,5 +615,31 @@ func TestFormatRetryEvent(t *testing.T) {
 	want := `LLM request failed: anthropic claude-opus-4-7; retrying in 16s. transport: Post "http://169.254.169.254/gateway/llm/_/gateway/anthropic/v1/messages": dial tcp 169.254.169.254:80: i/o timeout`
 	if msg != want {
 		t.Fatalf("FormatRetryEvent() = %q, want %q", msg, want)
+	}
+}
+
+func TestIsServerSideContentType(t *testing.T) {
+	serverSide := []ContentType{
+		ContentTypeServerToolUse,
+		ContentTypeWebSearchToolResult,
+		ContentTypeWebSearchResult,
+	}
+	for _, ct := range serverSide {
+		if !IsServerSideContentType(ct) {
+			t.Errorf("IsServerSideContentType(%v) = false, want true", ct)
+		}
+	}
+
+	notServerSide := []ContentType{
+		ContentTypeText,
+		ContentTypeToolUse,
+		ContentTypeToolResult,
+		ContentTypeThinking,
+		ContentTypeRedactedThinking,
+	}
+	for _, ct := range notServerSide {
+		if IsServerSideContentType(ct) {
+			t.Errorf("IsServerSideContentType(%v) = true, want false", ct)
+		}
 	}
 }

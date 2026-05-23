@@ -274,6 +274,8 @@ func (m *mockLLMService) Do(ctx context.Context, request *llm.Request) (*llm.Res
 	}, nil
 }
 
+func (m *mockLLMService) Provider() string { return "" }
+
 func (m *mockLLMService) TokenContextWindow() int {
 	if m.tokenContextWindow == 0 {
 		return 4096

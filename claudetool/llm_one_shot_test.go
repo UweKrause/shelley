@@ -31,6 +31,7 @@ func (m *oneShotMockService) Do(_ context.Context, req *llm.Request) (*llm.Respo
 	}, nil
 }
 
+func (m *oneShotMockService) Provider() string        { return "" }
 func (m *oneShotMockService) TokenContextWindow() int { return 100000 }
 func (m *oneShotMockService) MaxImageDimension() int  { return 0 }
 func (m *oneShotMockService) MaxImageBytes() int      { return 0 }

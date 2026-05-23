@@ -430,6 +430,7 @@ func (s limitedService) Do(context.Context, *llm.Request) (*llm.Response, error)
 func (s limitedService) TokenContextWindow() int { return 0 }
 func (s limitedService) MaxImageDimension() int  { return s.maxDim }
 func (s limitedService) MaxImageBytes() int      { return s.maxBytes }
+func (s limitedService) Provider() string        { return "test" }
 
 func TestReadImageToolResizesOversizedImage(t *testing.T) {
 	browseTools := NewBrowseTools(context.Background(), 0)

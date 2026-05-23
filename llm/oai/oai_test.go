@@ -869,6 +869,61 @@ func TestFromLLMMessage(t *testing.T) {
 	}
 }
 
+func TestFromLLMMessageFiltersServerSideContent(t *testing.T) {
+	// Server-side content blocks (e.g., Anthropic web search) should be
+	// stripped when converting to OpenAI messages.
+	msg := llm.Message{
+		Role: llm.MessageRoleAssistant,
+		Content: []llm.Content{
+			{Type: llm.ContentTypeText, Text: "Let me search for that."},
+			{Type: llm.ContentTypeServerToolUse, ID: "srvtoolu_123", ToolName: "web_search"},
+			{Type: llm.ContentTypeWebSearchToolResult, ID: "srvtoolu_123"},
+			{Type: llm.ContentTypeText, Text: "Here are the results."},
+		},
+	}
+	messages := fromLLMMessage(msg)
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	got := messages[0].Content
+	want := "Let me search for that.\nHere are the results."
+	if got != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+	if len(messages[0].ToolCalls) != 0 {
+		t.Errorf("expected no tool calls, got %d", len(messages[0].ToolCalls))
+	}
+}
+
+func TestServerSideToolsFilteredFromOAIRequest(t *testing.T) {
+	// Server-side tools must not be sent to OpenAI.
+	tools := []*llm.Tool{
+		{
+			Name:        "bash",
+			Description: "Run a command",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		},
+		{
+			Name:       "web_search",
+			Type:       "web_search_20250305",
+			ServerSide: true,
+		},
+	}
+	var oaiTools []openai.Tool
+	for _, t := range tools {
+		if t.ServerSide {
+			continue
+		}
+		oaiTools = append(oaiTools, fromLLMTool(t))
+	}
+	if len(oaiTools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(oaiTools))
+	}
+	if oaiTools[0].Function.Name != "bash" {
+		t.Errorf("expected tool name %q, got %q", "bash", oaiTools[0].Function.Name)
+	}
+}
+
 func TestFromLLMTool(t *testing.T) {
 	tool := &llm.Tool{
 		Name:        "get_weather",

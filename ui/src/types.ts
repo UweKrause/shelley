@@ -48,6 +48,11 @@ export interface LLMContent {
   ToolUseEndTime?: string | null;
   Display?: unknown;
   Cache?: boolean;
+  // Web search result fields
+  Title?: string;
+  URL?: string;
+  PageAge?: string;
+  EncryptedContent?: string;
 }
 
 // API types

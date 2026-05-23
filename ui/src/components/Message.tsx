@@ -30,6 +30,7 @@ import BrowserEmulateTool from "./BrowserEmulateTool";
 import BrowserNetworkTool from "./BrowserNetworkTool";
 import BrowserAccessibilityTool from "./BrowserAccessibilityTool";
 import BrowserProfileTool from "./BrowserProfileTool";
+import WebSearchTool from "./WebSearchTool";
 import ThinkingContent from "./ThinkingContent";
 import UsageDetailModal from "./UsageDetailModal";
 import MessageActionBar from "./MessageActionBar";
@@ -344,13 +345,14 @@ const Message = React.memo(function Message({
   // Based on llm/llm.go constants (iota continues across types in same const block):
   // MessageRoleUser = 0, MessageRoleAssistant = 1,
   // ContentTypeText = 2, ContentTypeThinking = 3, ContentTypeRedactedThinking = 4,
-  // ContentTypeToolUse = 5, ContentTypeToolResult = 6
+  // ContentTypeToolUse = 5, ContentTypeToolResult = 6, ContentTypeServerToolUse = 7,
+  // ContentTypeWebSearchToolResult = 8, ContentTypeWebSearchResult = 9
   const getContentType = (type: number): string => {
     switch (type) {
       case 0:
-        return "message_role_user"; // Should not occur in Content, but handle gracefully
+        return "message_role_user";
       case 1:
-        return "message_role_assistant"; // Should not occur in Content, but handle gracefully
+        return "message_role_assistant";
       case 2:
         return "text";
       case 3:
@@ -361,6 +363,12 @@ const Message = React.memo(function Message({
         return "tool_use";
       case 6:
         return "tool_result";
+      case 7:
+        return "server_tool_use";
+      case 8:
+        return "web_search_tool_result";
+      case 9:
+        return "web_search_result";
       default:
         return "unknown";
     }
@@ -516,14 +524,23 @@ const Message = React.memo(function Message({
 
   // Build a map of tool use IDs to their inputs for linking tool_result back to tool_use
   const toolUseMap: Record<string, { name: string; input: unknown }> = {};
+  const serverToolResultMap: Record<string, LLMContent[]> = {};
   if (llmMessage && llmMessage.Content) {
     llmMessage.Content.forEach((content) => {
       if (content.Type === 5 && content.ID && content.ToolName) {
-        // tool_use
         toolUseMap[content.ID] = {
           name: content.ToolName,
           input: content.ToolInput,
         };
+      }
+      if (content.Type === 7 && content.ID && content.ToolName) {
+        toolUseMap[content.ID] = {
+          name: content.ToolName,
+          input: content.ToolInput,
+        };
+      }
+      if (content.Type === 8 && content.ToolUseID && content.ToolResult) {
+        serverToolResultMap[content.ToolUseID] = content.ToolResult;
       }
     });
   }
@@ -943,6 +960,58 @@ const Message = React.memo(function Message({
           />
         );
       }
+      case "server_tool_use": {
+        const searchResults = content.ID ? serverToolResultMap[content.ID] : undefined;
+        return (
+          <WebSearchTool
+            toolInput={content.ToolInput}
+            isRunning={!searchResults}
+            searchResults={searchResults}
+          />
+        );
+      }
+      case "web_search_tool_result": {
+        if (!content.ToolResult || content.ToolResult.length === 0) return null;
+        return (
+          <div className="web-search-results">
+            {content.ToolResult.map((result, index) => (
+              <div key={index} className="web-search-result">
+                <a
+                  href={result.URL || ""}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="web-search-result-title"
+                >
+                  {result.Title || "Untitled"}
+                </a>
+                <div className="web-search-result-meta">
+                  <span className="web-search-result-url">{result.URL || ""}</span>
+                  {result.PageAge && (
+                    <span className="web-search-result-age">{result.PageAge}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      }
+      case "web_search_result":
+        return (
+          <div className="web-search-result">
+            <a
+              href={content.URL || ""}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="web-search-result-title"
+            >
+              {content.Title || "Untitled"}
+            </a>
+            <div className="web-search-result-meta">
+              <span className="web-search-result-url">{content.URL || ""}</span>
+              {content.PageAge && <span className="web-search-result-age">{content.PageAge}</span>}
+            </div>
+          </div>
+        );
       case "redacted_thinking":
         return <div className="text-tertiary italic text-sm">[Thinking content hidden]</div>;
       case "thinking": {
@@ -1229,22 +1298,25 @@ const Message = React.memo(function Message({
     return null;
   }
 
-  // Filter out redacted thinking, empty content, tool_use, and tool_result
+  // Filter out redacted thinking, empty content, tool_use, tool_result, and server-side tool blocks
   // Keep thinking content (3) for display
   const meaningfulContent =
     llmMessage?.Content?.filter((c) => {
       const contentType = c.Type;
-      // Filter out redacted thinking (4), tool_use (5), tool_result (6), and empty text content
-      // Keep thinking (3) if it has content
       if (contentType === 3) {
         return !!(c.Thinking || c.Text);
       }
+      // 4 = redacted_thinking, 5 = tool_use, 6 = tool_result,
+      // 7 = server_tool_use, 8 = web_search_tool_result, 9 = web_search_result
       return (
         contentType !== 4 &&
         contentType !== 5 &&
         contentType !== 6 &&
+        contentType !== 7 &&
+        contentType !== 8 &&
+        contentType !== 9 &&
         (c.Text?.trim() || contentType !== 2)
-      ); // 4 = redacted_thinking, 5 = tool_use, 6 = tool_result, 2 = text
+      );
     }) || [];
 
   // Don't filter out messages that contain operation status like "[Operation cancelled]"

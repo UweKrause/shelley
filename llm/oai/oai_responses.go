@@ -29,6 +29,7 @@ type ResponsesService struct {
 	Org           string            // optional - organization ID
 	DumpLLM       bool              // whether to dump request/response text to files for debugging; defaults to false
 	ThinkingLevel llm.ThinkingLevel // thinking level (ThinkingLevelOff disables reasoning)
+	ProviderName  string            // e.g., "openai"
 
 	// ReasoningEffort, if non-empty, is used as the reasoning.effort value sent to
 	// the OpenAI Responses API verbatim, overriding ThinkingLevel. This allows
@@ -65,10 +66,21 @@ type responsesInputItem struct {
 }
 
 type responsesContent struct {
-	Type     string               `json:"type"` // "input_text", "output_text", "input_image"
-	Text     string               `json:"text,omitempty"`
-	ImageURL string               `json:"image_url,omitempty"`
-	Detail   responsesImageDetail `json:"detail,omitempty"`
+	Type        string                `json:"type"` // "input_text", "output_text", "input_image"
+	Text        string                `json:"text,omitempty"`
+	ImageURL    string                `json:"image_url,omitempty"`
+	Detail      responsesImageDetail  `json:"detail,omitempty"`
+	Annotations []responsesAnnotation `json:"annotations,omitempty"`
+}
+
+// responsesAnnotation is an annotation attached to output_text content.
+// For web_search results, OpenAI emits url_citation annotations.
+type responsesAnnotation struct {
+	Type       string `json:"type"` // "url_citation"
+	StartIndex int    `json:"start_index,omitempty"`
+	EndIndex   int    `json:"end_index,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
 }
 
 type responsesImageDetail string
@@ -76,8 +88,8 @@ type responsesImageDetail string
 const responsesImageDetailAuto responsesImageDetail = "auto"
 
 type responsesTool struct {
-	Type        string          `json:"type"` // "function"
-	Name        string          `json:"name"`
+	Type        string          `json:"type"` // "function" or "web_search_preview"
+	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
@@ -95,7 +107,7 @@ type responsesResponse struct {
 
 type responsesOutputItem struct {
 	ID        string             `json:"id"`
-	Type      string             `json:"type"`           // "message", "reasoning", "function_call"
+	Type      string             `json:"type"`           // "message", "reasoning", "function_call", "web_search_call"
 	Role      string             `json:"role,omitempty"` // for messages: "assistant"
 	Status    string             `json:"status,omitempty"`
 	Content   []responsesContent `json:"content,omitempty"`   // for messages
@@ -103,6 +115,14 @@ type responsesOutputItem struct {
 	Name      string             `json:"name,omitempty"`      // for function_call
 	Arguments string             `json:"arguments,omitempty"` // for function_call
 	Summary   []responsesSummary `json:"summary,omitempty"`   // for reasoning
+	Action    *responsesAction   `json:"action,omitempty"`    // for web_search_call (queries)
+}
+
+// responsesAction is the action descriptor for server-side tool calls like
+// web_search_call. For web_search, it carries the actual search queries.
+type responsesAction struct {
+	Type    string   `json:"type,omitempty"`
+	Queries []string `json:"queries,omitempty"`
 }
 
 // responsesSummary is an item in a reasoning output's summary array.
@@ -144,6 +164,9 @@ func fromLLMMessageResponses(msg llm.Message) []responsesInputItem {
 	var toolResults []llm.Content
 
 	for _, c := range msg.Content {
+		if llm.IsServerSideContentType(c.Type) {
+			continue // skip provider-specific server-side content blocks
+		}
 		if c.Type == llm.ContentTypeToolResult {
 			toolResults = append(toolResults, c)
 		} else {
@@ -316,10 +339,16 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 			// Convert message content
 			for _, c := range item.Content {
 				if c.Text != "" {
-					contents = append(contents, llm.Content{
+					text := llm.Content{
 						Type: llm.ContentTypeText,
 						Text: c.Text,
-					})
+					}
+					if len(c.Annotations) > 0 {
+						if b, err := json.Marshal(c.Annotations); err == nil {
+							text.Citations = b
+						}
+					}
+					contents = append(contents, text)
 				}
 			}
 		case "reasoning":
@@ -338,6 +367,31 @@ func (s *ResponsesService) toLLMResponseFromResponses(resp *responsesResponse, h
 					})
 				}
 			}
+		case "web_search_call":
+			// Server-side web search call. Surface it as a server_tool_use
+			// content block so the UI can show what was searched. The actual
+			// results land as url_citation annotations on the subsequent
+			// message text (handled above).
+			var queries []string
+			if item.Action != nil {
+				queries = item.Action.Queries
+			}
+			input := map[string]any{}
+			switch len(queries) {
+			case 0:
+				// no query info available
+			case 1:
+				input["query"] = queries[0]
+			default:
+				input["queries"] = queries
+			}
+			inputJSON, _ := json.Marshal(input)
+			contents = append(contents, llm.Content{
+				ID:        item.ID,
+				Type:      llm.ContentTypeServerToolUse,
+				ToolName:  "web_search",
+				ToolInput: inputJSON,
+			})
 		case "function_call":
 			// Convert function call to tool use
 			contents = append(contents, llm.Content{
@@ -390,6 +444,12 @@ func (s *ResponsesService) toLLMUsageFromResponses(usage responsesUsage, headers
 	u.CostUSD = llm.CostUSDFromResponse(headers)
 	return u
 }
+
+func (s *ResponsesService) Provider() string { return s.ProviderName }
+
+// SupportsServerSideWebSearch reports that the Responses API supports the
+// OpenAI server-side `web_search_preview` tool.
+func (s *ResponsesService) SupportsServerSideWebSearch() bool { return true }
 
 // TokenContextWindow returns the maximum token context window size for this service
 func (s *ResponsesService) TokenContextWindow() int {
@@ -447,9 +507,16 @@ func (s *ResponsesService) Do(ctx context.Context, ir *llm.Request) (*llm.Respon
 		allInput = append(allInput, items...)
 	}
 
-	// Convert tools
+	// Convert tools. Server-side tools (e.g. web_search_preview) are passed
+	// through as their provider-specific type with no name/description/schema.
 	var tools []responsesTool
 	for _, t := range ir.Tools {
+		if t.ServerSide {
+			if t.Type != "" {
+				tools = append(tools, responsesTool{Type: t.Type})
+			}
+			continue
+		}
 		tools = append(tools, fromLLMToolResponses(t))
 	}
 

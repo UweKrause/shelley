@@ -19,6 +19,8 @@ func (m *mockService) Do(ctx context.Context, req *llm.Request) (*llm.Response, 
 	return &llm.Response{Content: llm.TextContent("test response")}, nil
 }
 
+func (m *mockService) Provider() string { return "" }
+
 func (m *mockService) TokenContextWindow() int {
 	return 4096
 }

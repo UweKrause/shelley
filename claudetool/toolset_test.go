@@ -2,9 +2,12 @@ package claudetool
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"shelley.exe.dev/llm"
 )
 
 func TestIsStrongModel(t *testing.T) {
@@ -435,4 +438,192 @@ func TestNewToolSet_BuildAvailableModelsFreshOnEachCall(t *testing.T) {
 	if !strings.Contains(desc3, "subagent") {
 		t.Errorf("expected fallback description to mention subagents, got: %s", desc3)
 	}
+}
+
+// mockServiceWithProvider is a mock llm.Service that returns a configurable provider.
+type mockServiceWithProvider struct {
+	mockService
+	provider string
+}
+
+func (m *mockServiceWithProvider) Provider() string { return m.provider }
+
+// mockServiceWithWebSearch is mockServiceWithProvider plus the optional
+// ServerSideWebSearchCapable marker interface (e.g. for OpenAI Responses API).
+type mockServiceWithWebSearch struct {
+	mockServiceWithProvider
+}
+
+func (m *mockServiceWithWebSearch) SupportsServerSideWebSearch() bool { return true }
+
+// mockLLMProviderWithProviders is a mock that maps model IDs to providers.
+// OpenAI-flavored services are returned as mockServiceWithWebSearch so they
+// satisfy ServerSideWebSearchCapable (mirroring oai.ResponsesService).
+type mockLLMProviderWithProviders struct {
+	providers map[string]string
+}
+
+func (m *mockLLMProviderWithProviders) GetService(modelID string) (llm.Service, error) {
+	p := m.providers[modelID]
+	if p == "" {
+		return nil, fmt.Errorf("unknown model: %s", modelID)
+	}
+	if p == "openai" {
+		return &mockServiceWithWebSearch{mockServiceWithProvider: mockServiceWithProvider{provider: p}}, nil
+	}
+	return &mockServiceWithProvider{provider: p}, nil
+}
+
+func (m *mockLLMProviderWithProviders) GetAvailableModels() []string {
+	return nil
+}
+
+// plainOpenAIProvider returns a mockServiceWithProvider (no web search
+// capability) reporting provider "openai".
+type plainOpenAIProvider struct{}
+
+func (p *plainOpenAIProvider) GetService(modelID string) (llm.Service, error) {
+	return &mockServiceWithProvider{provider: "openai"}, nil
+}
+func (p *plainOpenAIProvider) GetAvailableModels() []string { return nil }
+
+func TestNewToolSet_WebSearchForAnthropicModels(t *testing.T) {
+	provider := &mockLLMProviderWithProviders{
+		providers: map[string]string{
+			"claude-sonnet-4.5": "anthropic",
+			"claude-opus-4.6":   "anthropic",
+			"claude-haiku-4.5":  "anthropic",
+			"gpt-5.3-codex":     "openai",
+		},
+	}
+
+	hasWebSearchToolOfType := func(ts *ToolSet, toolType string) bool {
+		for _, tool := range ts.Tools() {
+			if tool.Name == "web_search" && tool.Type == toolType {
+				return true
+			}
+		}
+		return false
+	}
+	hasWebSearchTool := func(ts *ToolSet) bool {
+		for _, tool := range ts.Tools() {
+			if tool.Name == "web_search" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Anthropic models should have the Anthropic-flavored web_search tool
+	for _, modelID := range []string{"claude-sonnet-4.5", "claude-opus-4.6", "claude-haiku-4.5"} {
+		t.Run(modelID+" has web_search", func(t *testing.T) {
+			cfg := ToolSetConfig{
+				LLMProvider: provider,
+				ModelID:     modelID,
+				WorkingDir:  "/test",
+			}
+			ts := NewToolSet(context.Background(), cfg)
+			if !hasWebSearchToolOfType(ts, "web_search_20250305") {
+				t.Errorf("expected anthropic web_search tool for %s", modelID)
+			}
+		})
+	}
+
+	// OpenAI models should have the OpenAI-flavored web_search tool
+	// (only when the service is the Responses-API-backed one).
+	t.Run("openai has web_search_preview", func(t *testing.T) {
+		cfg := ToolSetConfig{
+			LLMProvider: provider,
+			ModelID:     "gpt-5.3-codex",
+			WorkingDir:  "/test",
+		}
+		ts := NewToolSet(context.Background(), cfg)
+		if !hasWebSearchToolOfType(ts, "web_search_preview") {
+			t.Error("expected web_search_preview tool for OpenAI model")
+		}
+	})
+
+	// OpenAI-compatible Chat Completions services (which don't support web
+	// search) should NOT get a web_search tool.
+	t.Run("openai chat-completions service has no web_search", func(t *testing.T) {
+		// Build a provider that returns a plain openai service WITHOUT the
+		// ServerSideWebSearchCapable marker interface.
+		plainProvider := &plainOpenAIProvider{}
+		cfg := ToolSetConfig{
+			LLMProvider: plainProvider,
+			ModelID:     "openai-chat",
+			WorkingDir:  "/test",
+		}
+		ts := NewToolSet(context.Background(), cfg)
+		if hasWebSearchTool(ts) {
+			t.Error("expected no web_search tool for a chat-completions openai service")
+		}
+	})
+
+	// Unknown model should NOT have web_search tool
+	t.Run("unknown model has no web_search", func(t *testing.T) {
+		cfg := ToolSetConfig{
+			LLMProvider: provider,
+			ModelID:     "unknown-model",
+			WorkingDir:  "/test",
+		}
+		ts := NewToolSet(context.Background(), cfg)
+		if hasWebSearchTool(ts) {
+			t.Error("expected no web_search tool for unknown model")
+		}
+	})
+
+	// Empty model should NOT have web_search tool
+	t.Run("empty model has no web_search", func(t *testing.T) {
+		cfg := ToolSetConfig{
+			LLMProvider: provider,
+			ModelID:     "",
+			WorkingDir:  "/test",
+		}
+		ts := NewToolSet(context.Background(), cfg)
+		if hasWebSearchTool(ts) {
+			t.Error("expected no web_search tool for empty model ID")
+		}
+	})
+
+	// Nil LLMProvider should NOT have web_search tool
+	t.Run("nil provider has no web_search", func(t *testing.T) {
+		cfg := ToolSetConfig{
+			LLMProvider: nil,
+			ModelID:     "claude-sonnet-4.5",
+			WorkingDir:  "/test",
+		}
+		ts := NewToolSet(context.Background(), cfg)
+		if hasWebSearchTool(ts) {
+			t.Error("expected no web_search tool with nil provider")
+		}
+	})
+
+	// Server-side tool should have no Run function, no InputSchema, no Description
+	t.Run("web_search tool properties", func(t *testing.T) {
+		cfg := ToolSetConfig{
+			LLMProvider: provider,
+			ModelID:     "claude-sonnet-4.5",
+			WorkingDir:  "/test",
+		}
+		ts := NewToolSet(context.Background(), cfg)
+		for _, tool := range ts.Tools() {
+			if tool.Name == "web_search" {
+				if tool.Run != nil {
+					t.Error("server-side tool should have nil Run function")
+				}
+				if tool.InputSchema != nil {
+					t.Error("server-side tool should have nil InputSchema")
+				}
+				if tool.Description != "" {
+					t.Error("server-side tool should have empty Description")
+				}
+				if !tool.ServerSide {
+					t.Error("server-side tool should have ServerSide=true")
+				}
+				return
+			}
+		}
+		t.Error("web_search tool not found")
+	})
 }

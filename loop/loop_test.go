@@ -1500,6 +1500,8 @@ func (e *errorLLMService) Do(ctx context.Context, req *llm.Request) (*llm.Respon
 	return nil, e.err
 }
 
+func (e *errorLLMService) Provider() string { return "" }
+
 func (e *errorLLMService) TokenContextWindow() int {
 	return 200000
 }
@@ -1535,6 +1537,8 @@ func (r *retryableLLMService) Do(ctx context.Context, req *llm.Request) (*llm.Re
 		StopReason: llm.StopReasonEndTurn,
 	}, nil
 }
+
+func (r *retryableLLMService) Provider() string { return "" }
 
 func (r *retryableLLMService) TokenContextWindow() int {
 	return 200000

@@ -184,7 +184,7 @@ func All() []Model {
 				if config.OpenAIAPIKey == "" {
 					return nil, fmt.Errorf("gpt-5.5 requires OPENAI_API_KEY")
 				}
-				svc := &oai.ResponsesService{Model: oai.GPT55, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
+				svc := &oai.ResponsesService{Model: oai.GPT55, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
 				if url := config.getOpenAIURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -218,7 +218,7 @@ func All() []Model {
 				if config.FireworksAPIKey == "" {
 					return nil, fmt.Errorf("glm-5.1-fireworks requires FIREWORKS_API_KEY")
 				}
-				svc := &oai.Service{Model: oai.GLM51Fireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc}
+				svc := &oai.Service{Model: oai.GLM51Fireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
 				if url := config.getFireworksURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -251,7 +251,7 @@ func All() []Model {
 				if config.FireworksAPIKey == "" {
 					return nil, fmt.Errorf("kimi-k2.6-fireworks requires FIREWORKS_API_KEY")
 				}
-				svc := &oai.Service{Model: oai.KimiK26Fireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc}
+				svc := &oai.Service{Model: oai.KimiK26Fireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
 				if url := config.getFireworksURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -268,7 +268,7 @@ func All() []Model {
 				if config.FireworksAPIKey == "" {
 					return nil, fmt.Errorf("deepseek-v4-pro-fireworks requires FIREWORKS_API_KEY")
 				}
-				svc := &oai.Service{Model: oai.DeepseekV4ProFireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc}
+				svc := &oai.Service{Model: oai.DeepseekV4ProFireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
 				if url := config.getFireworksURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -354,7 +354,7 @@ func All() []Model {
 				if config.OpenAIAPIKey == "" {
 					return nil, fmt.Errorf("gpt-5.4 requires OPENAI_API_KEY")
 				}
-				svc := &oai.ResponsesService{Model: oai.GPT54, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
+				svc := &oai.ResponsesService{Model: oai.GPT54, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
 				if url := config.getOpenAIURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -371,7 +371,7 @@ func All() []Model {
 				if config.OpenAIAPIKey == "" {
 					return nil, fmt.Errorf("gpt-5.3-codex requires OPENAI_API_KEY")
 				}
-				svc := &oai.ResponsesService{Model: oai.GPT53Codex, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
+				svc := &oai.ResponsesService{Model: oai.GPT53Codex, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
 				if url := config.getOpenAIURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -388,7 +388,7 @@ func All() []Model {
 				if config.OpenAIAPIKey == "" {
 					return nil, fmt.Errorf("gpt-5.2-codex requires OPENAI_API_KEY")
 				}
-				svc := &oai.ResponsesService{Model: oai.GPT52Codex, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
+				svc := &oai.ResponsesService{Model: oai.GPT52Codex, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
 				if url := config.getOpenAIURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -422,7 +422,7 @@ func All() []Model {
 				if config.FireworksAPIKey == "" {
 					return nil, fmt.Errorf("gpt-oss-20b-fireworks requires FIREWORKS_API_KEY")
 				}
-				svc := &oai.Service{Model: oai.GPTOSS20B, APIKey: config.FireworksAPIKey, HTTPC: httpc}
+				svc := &oai.Service{Model: oai.GPTOSS20B, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
 				if url := config.getFireworksURL(); url != "" {
 					svc.ModelURL = url
 				}
@@ -562,6 +562,8 @@ func (l *loggingService) Do(ctx context.Context, request *llm.Request) (*llm.Res
 	return response, err
 }
 
+func (l *loggingService) Provider() string { return l.service.Provider() }
+
 // TokenContextWindow delegates to the underlying service
 func (l *loggingService) TokenContextWindow() int {
 	return l.service.TokenContextWindow()
@@ -581,6 +583,17 @@ func (l *loggingService) MaxImageBytes() int {
 func (l *loggingService) UseSimplifiedPatch() bool {
 	if sp, ok := l.service.(llm.SimplifiedPatcher); ok {
 		return sp.UseSimplifiedPatch()
+	}
+	return false
+}
+
+// SupportsServerSideWebSearch delegates to the underlying service if it
+// implements claudetool.ServerSideWebSearchCapable. We use a structural
+// interface here to avoid importing claudetool from models.
+func (l *loggingService) SupportsServerSideWebSearch() bool {
+	type capable interface{ SupportsServerSideWebSearch() bool }
+	if c, ok := l.service.(capable); ok {
+		return c.SupportsServerSideWebSearch()
 	}
 	return false
 }
@@ -839,8 +852,9 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 				ModelName: model.ModelName,
 				URL:       model.Endpoint,
 			},
-			MaxTokens: int(model.MaxTokens),
-			HTTPC:     m.httpc,
+			MaxTokens:    int(model.MaxTokens),
+			HTTPC:        m.httpc,
+			ProviderName: "openai",
 		}
 	case "openai-responses":
 		return &oai.ResponsesService{
@@ -854,6 +868,7 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			HTTPC:           m.httpc,
 			ThinkingLevel:   llm.ThinkingLevelMedium,
 			ReasoningEffort: model.ReasoningEffort,
+			ProviderName:    "openai",
 		}
 	case "gemini":
 		return &gem.Service{

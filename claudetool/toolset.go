@@ -232,6 +232,43 @@ func NewOrchestratorToolSet(ctx context.Context, cfg OrchestratorToolSetConfig) 
 	}
 }
 
+// ServerSideWebSearchCapable is implemented by services that support the
+// OpenAI-style `web_search_preview` server-side tool. Only the Responses API
+// supports web search; the legacy Chat Completions API does not.
+type ServerSideWebSearchCapable interface {
+	SupportsServerSideWebSearch() bool
+}
+
+// serverSideTools returns server-side tools appropriate for the given service.
+// Server-side tools are executed on the LLM provider's infrastructure.
+func serverSideTools(svc llm.Service) []*llm.Tool {
+	switch svc.Provider() {
+	case "anthropic":
+		return []*llm.Tool{
+			{
+				Name:       "web_search",
+				Type:       "web_search_20250305",
+				ServerSide: true,
+			},
+		}
+	case "openai":
+		// Only OpenAI's Responses API supports server-side web search;
+		// skip Chat Completions services for OpenAI-compatible endpoints.
+		// https://platform.openai.com/docs/guides/tools-web-search
+		if c, ok := svc.(ServerSideWebSearchCapable); !ok || !c.SupportsServerSideWebSearch() {
+			return nil
+		}
+		return []*llm.Tool{
+			{
+				Name:       "web_search",
+				Type:       "web_search_preview",
+				ServerSide: true,
+			},
+		}
+	}
+	return nil
+}
+
 // NewToolSet creates a new set of tools for a conversation.
 // isStrongModel returns true for models that can handle complex tool schemas.
 func isStrongModel(modelID string) bool {
@@ -343,6 +380,14 @@ func NewToolSet(ctx context.Context, cfg ToolSetConfig) *ToolSet {
 			tools = append(tools, browserTools...)
 		}
 		cleanup = browserCleanup
+	}
+
+	// Add server-side tools (e.g., web search for Anthropic models, or for
+	// OpenAI's Responses API).
+	if cfg.LLMProvider != nil && cfg.ModelID != "" {
+		if svc, err := cfg.LLMProvider.GetService(cfg.ModelID); err == nil {
+			tools = append(tools, serverSideTools(svc)...)
+		}
 	}
 
 	tools = FilterTools(tools, cfg.ToolOverrides, cfg.DisableAllTools)

@@ -17,6 +17,8 @@ import (
 type Service interface {
 	// Do sends a request to an LLM.
 	Do(context.Context, *Request) (*Response, error)
+	// Provider returns the provider name (e.g., "anthropic", "openai", "fireworks", "gemini").
+	Provider() string
 	// TokenContextWindow returns the maximum token context window size for this service
 	TokenContextWindow() int
 	// MaxImageDimension returns the maximum allowed dimension (width or height) for images.
@@ -171,6 +173,11 @@ type Tool struct {
 	// Cache indicates whether to use prompt caching for this tool
 	Cache bool
 
+	// ServerSide marks tools that are executed server-side by the LLM provider
+	// (e.g., Anthropic web search). These tools are provider-specific and must
+	// be filtered out when sending requests to other providers.
+	ServerSide bool
+
 	// The Run function is automatically called when the tool is used.
 	// Run functions may be called concurrently with each other and themselves.
 	// The input to Run function is the input to the tool, as provided by Claude, in compliance with the input schema.
@@ -261,6 +268,17 @@ type Content struct {
 	DisplayHeight int `json:",omitempty"`
 
 	Cache bool
+
+	// Server-side tool fields (Anthropic web search)
+	Caller    json.RawMessage // for server_tool_use blocks
+	Citations json.RawMessage // for text blocks with citations
+
+	// Web search result fields
+	Title            string
+	URL              string
+	EncryptedContent string
+	PageAge          string
+	EncryptedIndex   string
 }
 
 func StringContent(s string) Content {
@@ -312,6 +330,9 @@ const (
 	ContentTypeRedactedThinking
 	ContentTypeToolUse
 	ContentTypeToolResult
+	ContentTypeServerToolUse
+	ContentTypeWebSearchToolResult
+	ContentTypeWebSearchResult // individual search result inside web_search_tool_result
 
 	ToolChoiceTypeAuto ToolChoiceType = iota // default
 	ToolChoiceTypeAny                        // any tool, but must use one
@@ -324,6 +345,18 @@ const (
 	StopReasonToolUse
 	StopReasonRefusal
 )
+
+// IsServerSideContentType reports whether a content type represents server-side
+// tool activity (e.g., Anthropic web search). These content blocks are
+// provider-specific and should be filtered out when sending to other providers.
+func IsServerSideContentType(ct ContentType) bool {
+	switch ct {
+	case ContentTypeServerToolUse, ContentTypeWebSearchToolResult, ContentTypeWebSearchResult:
+		return true
+	default:
+		return false
+	}
+}
 
 // ThinkingLevel controls how much thinking/reasoning the model does.
 // ThinkingLevelOff is the zero value and disables thinking.

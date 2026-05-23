@@ -50,6 +50,7 @@ import BrowserEmulateTool from "./BrowserEmulateTool";
 import BrowserNetworkTool from "./BrowserNetworkTool";
 import BrowserAccessibilityTool from "./BrowserAccessibilityTool";
 import BrowserProfileTool from "./BrowserProfileTool";
+import WebSearchTool from "./WebSearchTool";
 import DirectoryPickerModal from "./DirectoryPickerModal";
 import { useVersionChecker } from "./VersionChecker";
 import TerminalPanel, { EphemeralTerminal } from "./TerminalPanel";
@@ -301,6 +302,7 @@ const TOOL_COMPONENTS: Record<string, React.ComponentType<any>> = {
   browser_network: BrowserNetworkTool,
   browser_accessibility: BrowserAccessibilityTool,
   browser_profile: BrowserProfileTool,
+  web_search: WebSearchTool,
   // Backwards compat: old per-action tool names stored in existing databases.
   browser_take_screenshot: ScreenshotTool,
   browser_navigate: BrowserNavigateTool,
@@ -1822,14 +1824,15 @@ function ChatInterface({
             // Extract text content and tool uses separately
             const textContents: LLMContent[] = [];
             const toolUses: LLMContent[] = [];
+            const serverToolResults: Record<string, LLMContent[]> = {};
 
             llmData.Content.forEach((content: LLMContent) => {
               if (content.Type === 2) {
-                // text
                 textContents.push(content);
-              } else if (content.Type === 5) {
-                // tool_use
+              } else if (content.Type === 5 || content.Type === 7) {
                 toolUses.push(content);
+              } else if (content.Type === 8 && content.ToolUseID && content.ToolResult) {
+                serverToolResults[content.ToolUseID] = content.ToolResult;
               }
             });
 
@@ -1848,20 +1851,26 @@ function ChatInterface({
             // Add tool uses as separate items
             toolUses.forEach((toolUse) => {
               const resultData = toolUse.ID ? toolResultMap[toolUse.ID] : undefined;
+              const serverResult = toolUse.ID ? serverToolResults[toolUse.ID] : undefined;
               const displayData = toolUse.ID ? displayDataMap[toolUse.ID] : undefined;
+              // Server-side tool uses (Type 7, e.g. web_search) already ran on
+              // the provider; even when we don't get a structured tool_result
+              // back (e.g. OpenAI Responses), the call is complete by the time
+              // it lands in llm_data.
+              const isServerSideToolUse = toolUse.Type === 7;
               items.push({
                 type: "tool",
                 generation: message.generation,
                 toolUseId: toolUse.ID,
                 toolName: toolUse.ToolName,
                 toolInput: toolUse.ToolInput,
-                toolResult: resultData?.result,
-                // Mark as error if truncated and no result
-                toolError: resultData?.error || (wasTruncated && !resultData),
+                toolResult: resultData?.result || serverResult,
+                toolError: resultData?.error || (wasTruncated && !resultData && !serverResult),
                 toolStartTime: resultData?.startTime,
                 toolEndTime: resultData?.endTime,
-                // Mark as complete if truncated (tool was lost, not running)
-                hasResult: !!resultData || wasTruncated,
+                // Mark as complete if truncated (tool was lost, not running),
+                // or if this is a server-side tool use.
+                hasResult: !!resultData || !!serverResult || wasTruncated || isServerSideToolUse,
                 display: displayData,
               });
             });

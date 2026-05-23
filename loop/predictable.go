@@ -50,6 +50,8 @@ func NewPredictableService() *PredictableService {
 	return svc
 }
 
+func (s *PredictableService) Provider() string { return "builtin" }
+
 // TokenContextWindow returns the maximum token context window size
 func (s *PredictableService) TokenContextWindow() int {
 	return s.tokenContextWindow

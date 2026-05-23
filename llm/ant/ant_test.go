@@ -2239,3 +2239,430 @@ func TestParseSSEStreamInvalidCharInJSON(t *testing.T) {
 		t.Errorf("resp.ID = %q, want %q", resp.ID, "msg_ok")
 	}
 }
+
+func TestServerToolUseContentRoundTrip(t *testing.T) {
+	// Test that server_tool_use content round-trips through toLLMContent and fromLLMContent
+	original := content{
+		Type:      "server_tool_use",
+		ID:        "srvtoolu_01SLAKenuxrrDsuNDTmHVHja",
+		ToolName:  "web_search",
+		ToolInput: json.RawMessage(`{"query":"San Francisco weather today"}`),
+		Caller:    json.RawMessage(`{"type":"direct"}`),
+	}
+
+	// Convert to LLM content
+	llmContent := toLLMContent(original)
+
+	if llmContent.Type != llm.ContentTypeServerToolUse {
+		t.Errorf("toLLMContent().Type = %v, want %v", llmContent.Type, llm.ContentTypeServerToolUse)
+	}
+	if llmContent.ID != original.ID {
+		t.Errorf("toLLMContent().ID = %q, want %q", llmContent.ID, original.ID)
+	}
+	if llmContent.ToolName != "web_search" {
+		t.Errorf("toLLMContent().ToolName = %q, want %q", llmContent.ToolName, "web_search")
+	}
+	if string(llmContent.ToolInput) != string(original.ToolInput) {
+		t.Errorf("toLLMContent().ToolInput = %s, want %s", llmContent.ToolInput, original.ToolInput)
+	}
+	if string(llmContent.Caller) != string(original.Caller) {
+		t.Errorf("toLLMContent().Caller = %s, want %s", llmContent.Caller, original.Caller)
+	}
+
+	// Convert back to Anthropic content
+	recovered := fromLLMContent(llmContent)
+
+	if recovered.Type != "server_tool_use" {
+		t.Errorf("fromLLMContent().Type = %q, want %q", recovered.Type, "server_tool_use")
+	}
+	if recovered.ID != original.ID {
+		t.Errorf("fromLLMContent().ID = %q, want %q", recovered.ID, original.ID)
+	}
+	if recovered.ToolName != "web_search" {
+		t.Errorf("fromLLMContent().ToolName = %q, want %q", recovered.ToolName, "web_search")
+	}
+	if string(recovered.ToolInput) != string(original.ToolInput) {
+		t.Errorf("fromLLMContent().ToolInput = %s, want %s", recovered.ToolInput, original.ToolInput)
+	}
+	if string(recovered.Caller) != string(original.Caller) {
+		t.Errorf("fromLLMContent().Caller = %s, want %s", recovered.Caller, original.Caller)
+	}
+}
+
+func TestWebSearchToolResultContentRoundTrip(t *testing.T) {
+	// Test that web_search_tool_result content round-trips
+	original := content{
+		Type:      "web_search_tool_result",
+		ToolUseID: "srvtoolu_01SLAKenuxrrDsuNDTmHVHja",
+		ToolResult: []content{
+			{
+				Type:             "web_search_result",
+				Title:            "Weather in San Francisco",
+				URL:              "https://example.com/weather",
+				EncryptedContent: "encrypted_data_here",
+				PageAge:          "2 hours ago",
+			},
+		},
+	}
+
+	// Convert to LLM content
+	llmContent := toLLMContent(original)
+
+	if llmContent.Type != llm.ContentTypeWebSearchToolResult {
+		t.Errorf("toLLMContent().Type = %v, want %v", llmContent.Type, llm.ContentTypeWebSearchToolResult)
+	}
+	if llmContent.ToolUseID != original.ToolUseID {
+		t.Errorf("toLLMContent().ToolUseID = %q, want %q", llmContent.ToolUseID, original.ToolUseID)
+	}
+	if len(llmContent.ToolResult) != 1 {
+		t.Fatalf("toLLMContent().ToolResult length = %d, want 1", len(llmContent.ToolResult))
+	}
+	result := llmContent.ToolResult[0]
+	if result.Type != llm.ContentTypeWebSearchResult {
+		t.Errorf("ToolResult[0].Type = %v, want %v", result.Type, llm.ContentTypeWebSearchResult)
+	}
+	if result.Title != "Weather in San Francisco" {
+		t.Errorf("ToolResult[0].Title = %q, want %q", result.Title, "Weather in San Francisco")
+	}
+	if result.URL != "https://example.com/weather" {
+		t.Errorf("ToolResult[0].URL = %q, want %q", result.URL, "https://example.com/weather")
+	}
+	if result.EncryptedContent != "encrypted_data_here" {
+		t.Errorf("ToolResult[0].EncryptedContent = %q, want %q", result.EncryptedContent, "encrypted_data_here")
+	}
+	if result.PageAge != "2 hours ago" {
+		t.Errorf("ToolResult[0].PageAge = %q, want %q", result.PageAge, "2 hours ago")
+	}
+
+	// Convert back to Anthropic content
+	recovered := fromLLMContent(llmContent)
+
+	if recovered.Type != "web_search_tool_result" {
+		t.Errorf("fromLLMContent().Type = %q, want %q", recovered.Type, "web_search_tool_result")
+	}
+	if recovered.ToolUseID != original.ToolUseID {
+		t.Errorf("fromLLMContent().ToolUseID = %q, want %q", recovered.ToolUseID, original.ToolUseID)
+	}
+	if len(recovered.ToolResult) != 1 {
+		t.Fatalf("fromLLMContent().ToolResult length = %d, want 1", len(recovered.ToolResult))
+	}
+	rr := recovered.ToolResult[0]
+	if rr.Type != "web_search_result" {
+		t.Errorf("ToolResult[0].Type = %q, want %q", rr.Type, "web_search_result")
+	}
+	if rr.Title != "Weather in San Francisco" {
+		t.Errorf("ToolResult[0].Title = %q, want %q", rr.Title, "Weather in San Francisco")
+	}
+	if rr.URL != "https://example.com/weather" {
+		t.Errorf("ToolResult[0].URL = %q, want %q", rr.URL, "https://example.com/weather")
+	}
+	if rr.EncryptedContent != "encrypted_data_here" {
+		t.Errorf("ToolResult[0].EncryptedContent = %q, want %q", rr.EncryptedContent, "encrypted_data_here")
+	}
+	if rr.PageAge != "2 hours ago" {
+		t.Errorf("ToolResult[0].PageAge = %q, want %q", rr.PageAge, "2 hours ago")
+	}
+}
+
+func TestTextWithCitationsRoundTrip(t *testing.T) {
+	text := "The weather in San Francisco is 65°F."
+	citations := json.RawMessage(`[{"type":"web_search_result_location","cited_text":"65 degrees","url":"https://example.com","title":"Weather","encrypted_index":"idx123"}]`)
+
+	original := content{
+		Type:      "text",
+		Text:      &text,
+		Citations: citations,
+	}
+
+	llmContent := toLLMContent(original)
+	if llmContent.Type != llm.ContentTypeText {
+		t.Errorf("Type = %v, want %v", llmContent.Type, llm.ContentTypeText)
+	}
+	if llmContent.Text != text {
+		t.Errorf("Text = %q, want %q", llmContent.Text, text)
+	}
+	if string(llmContent.Citations) != string(citations) {
+		t.Errorf("Citations = %s, want %s", llmContent.Citations, citations)
+	}
+
+	recovered := fromLLMContent(llmContent)
+	if recovered.Type != "text" {
+		t.Errorf("recovered Type = %q, want %q", recovered.Type, "text")
+	}
+	if *recovered.Text != text {
+		t.Errorf("recovered Text = %q, want %q", *recovered.Text, text)
+	}
+	if string(recovered.Citations) != string(citations) {
+		t.Errorf("recovered Citations = %s, want %s", recovered.Citations, citations)
+	}
+}
+
+func TestParseSSEStreamWebSearch(t *testing.T) {
+	// Build an SSE stream that includes server_tool_use and web_search_tool_result blocks
+	var b strings.Builder
+	b.WriteString(`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_ws","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[],"stop_reason":null,"usage":{"input_tokens":100,"output_tokens":0}}}` + "\n\n")
+
+	// server_tool_use block
+	b.WriteString(`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_abc123","name":"web_search","input":{"query":"weather SF"},"caller":{"type":"direct"}}}` + "\n\n")
+	b.WriteString(`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n")
+
+	// web_search_tool_result block
+	b.WriteString(`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_abc123","content":[{"type":"web_search_result","title":"SF Weather","url":"https://example.com","encrypted_content":"enc123","page_age":"1 hour ago"}]}}` + "\n\n")
+	b.WriteString(`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":1}` + "\n\n")
+
+	// text block with response
+	b.WriteString(`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}` + "\n\n")
+	b.WriteString(`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"The weather is nice."}}` + "\n\n")
+	b.WriteString(`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":2}` + "\n\n")
+
+	b.WriteString(`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}` + "\n\n")
+	b.WriteString(`event: message_stop` + "\n" + `data: {"type":"message_stop"}` + "\n\n")
+
+	resp, err := parseSSEStream(strings.NewReader(b.String()), nil)
+	if err != nil {
+		t.Fatalf("parseSSEStream() error = %v", err)
+	}
+
+	if len(resp.Content) != 3 {
+		t.Fatalf("Content length = %d, want 3", len(resp.Content))
+	}
+
+	// Verify server_tool_use block
+	if resp.Content[0].Type != "server_tool_use" {
+		t.Errorf("Content[0].Type = %q, want %q", resp.Content[0].Type, "server_tool_use")
+	}
+	if resp.Content[0].ID != "srvtoolu_abc123" {
+		t.Errorf("Content[0].ID = %q, want %q", resp.Content[0].ID, "srvtoolu_abc123")
+	}
+	if resp.Content[0].ToolName != "web_search" {
+		t.Errorf("Content[0].ToolName = %q, want %q", resp.Content[0].ToolName, "web_search")
+	}
+
+	// Verify web_search_tool_result block
+	if resp.Content[1].Type != "web_search_tool_result" {
+		t.Errorf("Content[1].Type = %q, want %q", resp.Content[1].Type, "web_search_tool_result")
+	}
+	if resp.Content[1].ToolUseID != "srvtoolu_abc123" {
+		t.Errorf("Content[1].ToolUseID = %q, want %q", resp.Content[1].ToolUseID, "srvtoolu_abc123")
+	}
+	if len(resp.Content[1].ToolResult) != 1 {
+		t.Fatalf("Content[1].ToolResult length = %d, want 1", len(resp.Content[1].ToolResult))
+	}
+	sr := resp.Content[1].ToolResult[0]
+	if sr.Title != "SF Weather" {
+		t.Errorf("ToolResult[0].Title = %q, want %q", sr.Title, "SF Weather")
+	}
+	if sr.URL != "https://example.com" {
+		t.Errorf("ToolResult[0].URL = %q, want %q", sr.URL, "https://example.com")
+	}
+
+	// Verify text block
+	if resp.Content[2].Type != "text" {
+		t.Errorf("Content[2].Type = %q, want %q", resp.Content[2].Type, "text")
+	}
+	if resp.Content[2].Text == nil || *resp.Content[2].Text != "The weather is nice." {
+		t.Errorf("Content[2].Text = %v, want %q", resp.Content[2].Text, "The weather is nice.")
+	}
+
+	// Verify full round-trip through toLLMResponse
+	llmResp := toLLMResponse(resp)
+	if len(llmResp.Content) != 3 {
+		t.Fatalf("LLM response Content length = %d, want 3", len(llmResp.Content))
+	}
+	if llmResp.Content[0].Type != llm.ContentTypeServerToolUse {
+		t.Errorf("LLM Content[0].Type = %v, want %v", llmResp.Content[0].Type, llm.ContentTypeServerToolUse)
+	}
+	if llmResp.Content[1].Type != llm.ContentTypeWebSearchToolResult {
+		t.Errorf("LLM Content[1].Type = %v, want %v", llmResp.Content[1].Type, llm.ContentTypeWebSearchToolResult)
+	}
+	if llmResp.Content[2].Type != llm.ContentTypeText {
+		t.Errorf("LLM Content[2].Type = %v, want %v", llmResp.Content[2].Type, llm.ContentTypeText)
+	}
+}
+
+func TestParseSSEStreamServerToolUseWithInputDeltas(t *testing.T) {
+	// Anthropic sends server_tool_use blocks with initial input:{} and then
+	// input_json_delta events. The parser must clear the initial empty input
+	// so deltas don't produce invalid JSON like {}{}.
+	var b strings.Builder
+	b.WriteString(`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[],"stop_reason":null,"usage":{"input_tokens":100,"output_tokens":0}}}` + "\n\n")
+
+	// server_tool_use block with empty initial input (as Anthropic actually sends)
+	b.WriteString(`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_01abc","name":"web_search","input":{},"caller":{"type":"direct"}}}` + "\n\n")
+	// Input arrives via deltas, just like real Anthropic SSE
+	b.WriteString(`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}` + "\n\n")
+	b.WriteString(`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\": \""}}` + "\n\n")
+	b.WriteString(`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"test query\""}}` + "\n\n")
+	b.WriteString(`event: content_block_delta` + "\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"}"}}` + "\n\n")
+	b.WriteString(`event: content_block_stop` + "\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n")
+
+	b.WriteString(`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}` + "\n\n")
+	b.WriteString(`event: message_stop` + "\n" + `data: {"type":"message_stop"}` + "\n\n")
+
+	resp, err := parseSSEStream(strings.NewReader(b.String()), nil)
+	if err != nil {
+		t.Fatalf("parseSSEStream() error = %v", err)
+	}
+
+	if len(resp.Content) != 1 {
+		t.Fatalf("Content length = %d, want 1", len(resp.Content))
+	}
+
+	// The ToolInput must be valid JSON from deltas only, not {}+deltas
+	wantInput := `{"query": "test query"}`
+	gotInput := string(resp.Content[0].ToolInput)
+	if gotInput != wantInput {
+		t.Errorf("ToolInput = %q, want %q", gotInput, wantInput)
+	}
+
+	// Verify it round-trips through JSON marshaling (the original bug)
+	llmResp := toLLMResponse(resp)
+	data, err := json.Marshal(llmResp.Content[0])
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	var roundtrip llm.Content
+	if err := json.Unmarshal(data, &roundtrip); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+}
+
+func TestPauseTurnStopReason(t *testing.T) {
+	// Verify that "pause_turn" maps to StopReasonToolUse
+	got, ok := toLLMStopReason["pause_turn"]
+	if !ok {
+		t.Fatal("pause_turn not found in toLLMStopReason")
+	}
+	if got != llm.StopReasonToolUse {
+		t.Errorf("toLLMStopReason[pause_turn] = %v, want %v", got, llm.StopReasonToolUse)
+	}
+}
+
+func TestServerSideToolJSON(t *testing.T) {
+	// Verify that server-side tool serialization produces the right JSON structure
+	serverTool := fromLLMTool(&llm.Tool{
+		Name: "web_search",
+		Type: "web_search_20250305",
+	})
+
+	data, err := json.Marshal(serverTool)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if decoded["name"] != "web_search" {
+		t.Errorf("name = %v, want %q", decoded["name"], "web_search")
+	}
+	if decoded["type"] != "web_search_20250305" {
+		t.Errorf("type = %v, want %q", decoded["type"], "web_search_20250305")
+	}
+	// Server-side tools should NOT have description or input_schema
+	if _, ok := decoded["description"]; ok {
+		t.Error("server-side tool should not have description")
+	}
+	if _, ok := decoded["input_schema"]; ok {
+		t.Error("server-side tool should not have input_schema")
+	}
+}
+
+func TestWebSearchContentSurvivesJSONRoundTrip(t *testing.T) {
+	// Verify that server-side tool fields survive json.Marshal/Unmarshal
+	// on llm.Message, which is how messages are stored in and loaded from
+	// the database (via LlmData column).
+	original := llm.Message{
+		Role: llm.MessageRoleAssistant,
+		Content: []llm.Content{
+			{
+				Type:      llm.ContentTypeServerToolUse,
+				ID:        "srvtoolu_abc",
+				ToolName:  "web_search",
+				ToolInput: json.RawMessage(`{"query":"test"}`),
+				Caller:    json.RawMessage(`{"type":"direct"}`),
+			},
+			{
+				Type:      llm.ContentTypeWebSearchToolResult,
+				ToolUseID: "srvtoolu_abc",
+				ToolResult: []llm.Content{
+					{
+						Type:             llm.ContentTypeWebSearchResult,
+						Title:            "Test Result",
+						URL:              "https://example.com",
+						EncryptedContent: "enc123",
+						PageAge:          "1 hour ago",
+					},
+				},
+			},
+			{
+				Type:      llm.ContentTypeText,
+				Text:      "The answer is 42.",
+				Citations: json.RawMessage(`[{"type":"web_search_result_location"}]`),
+			},
+		},
+	}
+
+	// Marshal (simulating DB write)
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	// Unmarshal (simulating DB read)
+	var restored llm.Message
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	if len(restored.Content) != 3 {
+		t.Fatalf("Content length = %d, want 3", len(restored.Content))
+	}
+
+	// Check server_tool_use fields survived
+	c0 := restored.Content[0]
+	if c0.Type != llm.ContentTypeServerToolUse {
+		t.Errorf("Content[0].Type = %v, want ServerToolUse", c0.Type)
+	}
+	if c0.ID != "srvtoolu_abc" {
+		t.Errorf("Content[0].ID = %q, want %q", c0.ID, "srvtoolu_abc")
+	}
+	if string(c0.Caller) != `{"type":"direct"}` {
+		t.Errorf("Content[0].Caller = %s, want %s", c0.Caller, `{"type":"direct"}`)
+	}
+
+	// Check web_search_tool_result fields survived
+	c1 := restored.Content[1]
+	if c1.Type != llm.ContentTypeWebSearchToolResult {
+		t.Errorf("Content[1].Type = %v, want WebSearchToolResult", c1.Type)
+	}
+	if len(c1.ToolResult) != 1 {
+		t.Fatalf("Content[1].ToolResult length = %d, want 1", len(c1.ToolResult))
+	}
+	if c1.ToolResult[0].Title != "Test Result" {
+		t.Errorf("ToolResult[0].Title = %q, want %q", c1.ToolResult[0].Title, "Test Result")
+	}
+	if c1.ToolResult[0].Type != llm.ContentTypeWebSearchResult {
+		t.Errorf("ToolResult[0].Type = %v, want %v", c1.ToolResult[0].Type, llm.ContentTypeWebSearchResult)
+	}
+	if c1.ToolResult[0].URL != "https://example.com" {
+		t.Errorf("ToolResult[0].URL = %q, want %q", c1.ToolResult[0].URL, "https://example.com")
+	}
+	if c1.ToolResult[0].EncryptedContent != "enc123" {
+		t.Errorf("ToolResult[0].EncryptedContent = %q, want %q", c1.ToolResult[0].EncryptedContent, "enc123")
+	}
+
+	// Check text with citations survived
+	c2 := restored.Content[2]
+	if c2.Type != llm.ContentTypeText {
+		t.Errorf("Content[2].Type = %v, want Text", c2.Type)
+	}
+	if c2.Text != "The answer is 42." {
+		t.Errorf("Content[2].Text = %q, want %q", c2.Text, "The answer is 42.")
+	}
+	if string(c2.Citations) != `[{"type":"web_search_result_location"}]` {
+		t.Errorf("Content[2].Citations = %s, want citations JSON", c2.Citations)
+	}
+}

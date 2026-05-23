@@ -32,11 +32,14 @@ func _() {
 	_ = x[ContentTypeRedactedThinking-4]
 	_ = x[ContentTypeToolUse-5]
 	_ = x[ContentTypeToolResult-6]
+	_ = x[ContentTypeServerToolUse-7]
+	_ = x[ContentTypeWebSearchToolResult-8]
+	_ = x[ContentTypeWebSearchResult-9]
 }
 
-const _ContentType_name = "ContentTypeTextContentTypeThinkingContentTypeRedactedThinkingContentTypeToolUseContentTypeToolResult"
+const _ContentType_name = "ContentTypeTextContentTypeThinkingContentTypeRedactedThinkingContentTypeToolUseContentTypeToolResultContentTypeServerToolUseContentTypeWebSearchToolResultContentTypeWebSearchResult"
 
-var _ContentType_index = [...]uint8{0, 15, 34, 61, 79, 100}
+var _ContentType_index = [...]uint8{0, 15, 34, 61, 79, 100, 124, 154, 180}
 
 func (i ContentType) String() string {
 	idx := int(i) - 2
@@ -49,10 +52,10 @@ func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
-	_ = x[ToolChoiceTypeAuto-7]
-	_ = x[ToolChoiceTypeAny-8]
-	_ = x[ToolChoiceTypeNone-9]
-	_ = x[ToolChoiceTypeTool-10]
+	_ = x[ToolChoiceTypeAuto-10]
+	_ = x[ToolChoiceTypeAny-11]
+	_ = x[ToolChoiceTypeNone-12]
+	_ = x[ToolChoiceTypeTool-13]
 }
 
 const _ToolChoiceType_name = "ToolChoiceTypeAutoToolChoiceTypeAnyToolChoiceTypeNoneToolChoiceTypeTool"
@@ -60,8 +63,8 @@ const _ToolChoiceType_name = "ToolChoiceTypeAutoToolChoiceTypeAnyToolChoiceTypeN
 var _ToolChoiceType_index = [...]uint8{0, 18, 35, 53, 71}
 
 func (i ToolChoiceType) String() string {
-	idx := int(i) - 7
-	if i < 7 || idx >= len(_ToolChoiceType_index)-1 {
+	idx := int(i) - 10
+	if i < 10 || idx >= len(_ToolChoiceType_index)-1 {
 		return "ToolChoiceType(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
 	return _ToolChoiceType_name[_ToolChoiceType_index[idx]:_ToolChoiceType_index[idx+1]]
@@ -70,11 +73,11 @@ func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
-	_ = x[StopReasonStopSequence-11]
-	_ = x[StopReasonMaxTokens-12]
-	_ = x[StopReasonEndTurn-13]
-	_ = x[StopReasonToolUse-14]
-	_ = x[StopReasonRefusal-15]
+	_ = x[StopReasonStopSequence-14]
+	_ = x[StopReasonMaxTokens-15]
+	_ = x[StopReasonEndTurn-16]
+	_ = x[StopReasonToolUse-17]
+	_ = x[StopReasonRefusal-18]
 }
 
 const _StopReason_name = "StopReasonStopSequenceStopReasonMaxTokensStopReasonEndTurnStopReasonToolUseStopReasonRefusal"
@@ -82,8 +85,8 @@ const _StopReason_name = "StopReasonStopSequenceStopReasonMaxTokensStopReasonEnd
 var _StopReason_index = [...]uint8{0, 22, 41, 58, 75, 92}
 
 func (i StopReason) String() string {
-	idx := int(i) - 11
-	if i < 11 || idx >= len(_StopReason_index)-1 {
+	idx := int(i) - 14
+	if i < 14 || idx >= len(_StopReason_index)-1 {
 		return "StopReason(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
 	return _StopReason_name[_StopReason_index[idx]:_StopReason_index[idx+1]]

@@ -543,6 +543,8 @@ func calculateUsage(req *gemini.Request, res *gemini.Response) llm.Usage {
 	}
 }
 
+func (s *Service) Provider() string { return "gemini" }
+
 // TokenContextWindow returns the maximum token context window size for this service
 func (s *Service) TokenContextWindow() int {
 	model := s.Model
