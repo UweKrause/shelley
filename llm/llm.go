@@ -269,9 +269,17 @@ type Content struct {
 
 	Cache bool
 
-	// Server-side tool fields (Anthropic web search)
-	Caller    json.RawMessage // for server_tool_use blocks
-	Citations json.RawMessage // for text blocks with citations
+	// Server-side tool fields (Anthropic web search).
+	// These MUST stay omitempty: a nil json.RawMessage marshals to the JSON
+	// token `null`, which on reload unmarshals back to []byte("null") (not
+	// nil). Without omitempty, persisting a Content with no Caller and then
+	// reloading produces a non-nil Caller holding the bytes `null`, which we
+	// would send to Anthropic as `"caller": null`. The API rejects that with
+	//   server_tool_use.caller: Input should be an object
+	// and because the bad block is part of conversation history, every retry
+	// resends the same payload and the conversation is permanently wedged.
+	Caller    json.RawMessage `json:",omitempty"` // for server_tool_use blocks
+	Citations json.RawMessage `json:",omitempty"` // for text blocks with citations
 
 	// Web search result fields
 	Title            string

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -641,5 +642,44 @@ func TestIsServerSideContentType(t *testing.T) {
 		if IsServerSideContentType(ct) {
 			t.Errorf("IsServerSideContentType(%v) = true, want false", ct)
 		}
+	}
+}
+
+// TestContentCallerCitationsOmitEmpty pins the wire-format-safety contract of
+// llm.Content.Caller and llm.Content.Citations.
+//
+// These fields are persisted to the messages table as part of llm_data JSON
+// and later reloaded to be sent back to the LLM. Without `omitempty`, a nil
+// json.RawMessage marshals to the JSON token `null`, which on reload
+// unmarshals back to []byte("null") (not nil). We would then forward
+// `"caller": null` to Anthropic, which the API rejects with
+//
+//	server_tool_use.caller: Input should be an object
+//
+// and the bad block sits in conversation history forever, wedging every
+// retry. With omitempty, nil values are dropped on marshal and never come
+// back to bite us.
+func TestContentCallerCitationsOmitEmpty(t *testing.T) {
+	original := Content{
+		Type:     ContentTypeServerToolUse,
+		ID:       "srvtoolu_x",
+		ToolName: "web_search",
+	}
+	b, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := string(b); strings.Contains(s, `"Caller"`) || strings.Contains(s, `"Citations"`) {
+		t.Fatalf("nil Caller/Citations must not appear in marshaled JSON; got: %s", s)
+	}
+	var reloaded Content
+	if err := json.Unmarshal(b, &reloaded); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Caller != nil {
+		t.Errorf("reloaded Caller = %q, want nil", reloaded.Caller)
+	}
+	if reloaded.Citations != nil {
+		t.Errorf("reloaded Citations = %q, want nil", reloaded.Citations)
 	}
 }
