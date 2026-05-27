@@ -1797,9 +1797,10 @@ func (s *Server) sendEndOfTurnHook(ctx context.Context, hook db.ConversationHook
 	}
 
 	hookPayload := map[string]any{
-		"title": title,
-		"body":  body,
-		"data":  data,
+		"title":    title,
+		"body":     body,
+		"data":     data,
+		"category": "SHELLEY_END_OF_TURN_MESSAGE",
 	}
 	if subtitle != "" {
 		hookPayload["subtitle"] = subtitle
