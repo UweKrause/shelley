@@ -144,6 +144,11 @@ export const es: TranslationKeys = {
   imageSupportYes: "Supported",
   imageSupportNo: "Not supported",
   tags: "Etiquetas",
+  columnName: "Nombre",
+  columnModelId: "ID del modelo",
+  columnProvider: "Proveedor",
+  columnSource: "Origen",
+  columnActions: "Acciones",
   tagsPlaceholder: "separadas por comas, ej., slug, cheap",
   tagsTooltip:
     'Etiquetas separadas por comas para este modelo. Use "slug" para marcar este modelo para generar títulos de conversación. Si ningún modelo tiene la etiqueta "slug", se usará el modelo de la conversación.',

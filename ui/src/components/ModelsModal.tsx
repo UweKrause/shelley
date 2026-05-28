@@ -291,7 +291,7 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
       onClose={onClose}
       title={t("manageModels")}
       titleRight={headerRight}
-      className="modal-wide"
+      className="modal-xwide"
     >
       <div className="models-modal">
         {error && (
@@ -559,119 +559,119 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
               </button>
             </div>
           </div>
+        ) : // Model List
+        builtInModels.length === 0 && models.length === 0 ? (
+          <div className="models-empty">
+            <p>{t("noModelsConfigured")}</p>
+            <p className="models-empty-hint">{t("noModelsHint")}</p>
+          </div>
         ) : (
-          // Model List
-          <>
-            <div className="models-list">
-              {/* Built-in models (from env vars or gateway) - read only */}
+          <table className="models-table">
+            <thead>
+              <tr>
+                <th>{t("columnName")}</th>
+                <th>{t("columnModelId")}</th>
+                <th>{t("columnProvider")}</th>
+                <th>{t("columnSource")}</th>
+                <th>{t("endpoint")}</th>
+                <th>{t("tags")}</th>
+                <th className="models-table-actions-col">
+                  <span className="sr-only">{t("columnActions")}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
               {builtInModels
                 .filter((m) => m.id !== "predictable")
                 .map((model) => (
-                  <div key={model.id} className="model-card model-card-builtin">
-                    <div className="model-header">
-                      <div className="model-info">
-                        <span className="model-name">{model.display_name || model.id}</span>
-                        <span className="model-source">{model.source}</span>
-                      </div>
-                    </div>
-                    <div className="model-details">
-                      <span className="model-api-name">{model.id}</span>
-                    </div>
-                  </div>
+                  <tr key={model.id} className="models-table-row models-table-row-builtin">
+                    <td className="models-table-name">{model.display_name || model.id}</td>
+                    <td className="models-table-mono">{model.id}</td>
+                    <td className="models-table-muted">—</td>
+                    <td>{model.source}</td>
+                    <td className="models-table-muted">—</td>
+                    <td className="models-table-muted">—</td>
+                    <td className="models-table-actions"></td>
+                  </tr>
                 ))}
-
-              {/* Custom models - editable */}
               {models.map((model) => (
-                <div key={model.model_id} className="model-card">
-                  <div className="model-header">
-                    <div className="model-info">
-                      <span className="model-name">{model.display_name}</span>
-                      <span className="model-provider">{PROVIDER_LABELS[model.provider_type]}</span>
-                      {model.tags && (
-                        <span className="model-badge" title={model.tags}>
-                          {model.tags.split(",")[0]}
-                        </span>
-                      )}
-                    </div>
-                    <div className="model-actions">
-                      <button
-                        className="btn-icon"
-                        onClick={() => handleDuplicate(model)}
-                        title={t("duplicate")}
+                <tr key={model.model_id} className="models-table-row">
+                  <td className="models-table-name">{model.display_name}</td>
+                  <td className="models-table-mono">{model.model_name}</td>
+                  <td>{PROVIDER_LABELS[model.provider_type]}</td>
+                  <td className="models-table-muted">custom</td>
+                  <td className="models-table-endpoint" title={model.endpoint}>
+                    {model.endpoint}
+                  </td>
+                  <td className="models-table-tags" title={model.tags || undefined}>
+                    {model.tags || "—"}
+                  </td>
+                  <td className="models-table-actions">
+                    <button
+                      className="btn-icon"
+                      onClick={() => handleDuplicate(model)}
+                      title={t("duplicate")}
+                    >
+                      <svg
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        width="16"
+                        height="16"
                       >
-                        <svg
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                          width="16"
-                          height="16"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        className="btn-icon"
-                        onClick={() => handleEdit(model)}
-                        title={t("editModel")}
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      className="btn-icon"
+                      onClick={() => handleEdit(model)}
+                      title={t("editModel")}
+                    >
+                      <svg
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        width="16"
+                        height="16"
                       >
-                        <svg
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                          width="16"
-                          height="16"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        className="btn-icon btn-danger"
-                        onClick={() => handleDelete(model.model_id)}
-                        title={t("delete_")}
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      className="btn-icon btn-danger"
+                      onClick={() => handleDelete(model.model_id)}
+                      title={t("delete_")}
+                    >
+                      <svg
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        width="16"
+                        height="16"
                       >
-                        <svg
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                          width="16"
-                          height="16"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <div className="model-details">
-                    <span className="model-api-name">{model.model_name}</span>
-                    <span className="model-endpoint">{model.endpoint}</span>
-                  </div>
-                </div>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                        />
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
               ))}
-
-              {/* Empty state when no models at all */}
-              {builtInModels.length === 0 && models.length === 0 && (
-                <div className="models-empty">
-                  <p>{t("noModelsConfigured")}</p>
-                  <p className="models-empty-hint">{t("noModelsHint")}</p>
-                </div>
-              )}
-            </div>
-          </>
+            </tbody>
+          </table>
         )}
       </div>
     </Modal>

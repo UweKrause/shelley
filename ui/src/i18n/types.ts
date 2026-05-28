@@ -145,6 +145,11 @@ export interface TranslationKeys {
   tags: string;
   tagsPlaceholder: string;
   tagsTooltip: string;
+  columnName: string;
+  columnModelId: string;
+  columnProvider: string;
+  columnSource: string;
+  columnActions: string;
   reasoningEffort: string;
   reasoningEffortPlaceholder: string;
   reasoningEffortHint: string;

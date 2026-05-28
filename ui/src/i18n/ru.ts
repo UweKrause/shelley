@@ -144,6 +144,11 @@ export const ru: TranslationKeys = {
   imageSupportYes: "Supported",
   imageSupportNo: "Not supported",
   tags: "Теги",
+  columnName: "Имя",
+  columnModelId: "ID модели",
+  columnProvider: "Провайдер",
+  columnSource: "Источник",
+  columnActions: "Действия",
   tagsPlaceholder: "через запятую, напр., slug, cheap",
   tagsTooltip:
     'Теги через запятую для этой модели. Используйте "slug", чтобы отметить модель для генерации заголовков диалогов. Если ни одна модель не имеет тега "slug", будет использована модель диалога.',

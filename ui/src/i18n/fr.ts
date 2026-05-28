@@ -145,6 +145,11 @@ export const fr: TranslationKeys = {
   imageSupportYes: "Supported",
   imageSupportNo: "Not supported",
   tags: "Étiquettes",
+  columnName: "Nom",
+  columnModelId: "ID du modèle",
+  columnProvider: "Fournisseur",
+  columnSource: "Source",
+  columnActions: "Actions",
   tagsPlaceholder: "séparées par des virgules, ex : slug, cheap",
   tagsTooltip:
     "Étiquettes séparées par des virgules pour ce modèle. Utilisez « slug » pour marquer ce modèle pour la génération de titres de conversation. Si aucun modèle n'a l'étiquette « slug », le modèle de la conversation sera utilisé.",

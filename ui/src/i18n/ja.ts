@@ -144,6 +144,11 @@ export const ja: TranslationKeys = {
   imageSupportYes: "Supported",
   imageSupportNo: "Not supported",
   tags: "タグ",
+  columnName: "名前",
+  columnModelId: "モデルID",
+  columnProvider: "プロバイダー",
+  columnSource: "ソース",
+  columnActions: "操作",
   tagsPlaceholder: "カンマ区切り、例: slug, cheap",
   tagsTooltip:
     'このモデル用のカンマ区切りのタグ。会話タイトル生成用のモデルとしてマークするには"slug"を使用します。"slug"タグを持つモデルがない場合は、会話のモデルが使用されます。',

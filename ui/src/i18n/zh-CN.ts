@@ -144,6 +144,11 @@ export const zhCN: TranslationKeys = {
   imageSupportYes: "Supported",
   imageSupportNo: "Not supported",
   tags: "标签",
+  columnName: "名称",
+  columnModelId: "模型 ID",
+  columnProvider: "提供商",
+  columnSource: "来源",
+  columnActions: "操作",
   tagsPlaceholder: "逗号分隔，例如：slug, cheap",
   tagsTooltip:
     '此模型的逗号分隔标签。使用 "slug" 标记此模型用于生成对话标题。如果没有模型带有 "slug" 标签，将使用对话当前的模型。',

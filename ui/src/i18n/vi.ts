@@ -144,6 +144,11 @@ export const vi: TranslationKeys = {
   imageSupportYes: "Supported",
   imageSupportNo: "Not supported",
   tags: "Tags",
+  columnName: "Tên",
+  columnModelId: "ID model",
+  columnProvider: "Nhà cung cấp",
+  columnSource: "Nguồn",
+  columnActions: "Hành động",
   tagsPlaceholder: "phân cách bằng dấu phẩy, ví dụ slug, rẻ",
   tagsTooltip:
     'Sử dụng tag phân cách bằng dấu phẩy cho model. Dùng "slug" để đánh dấu model này làm model tạo tiêu đề hội thoại. Nếu không có model nào có tag "slug", model của hội thoại sẽ được sử dụng.',
