@@ -678,6 +678,14 @@ type CreateMessageParams struct {
 	UsageData           interface{} // Will be JSON marshalled
 	DisplayData         interface{} // Will be JSON marshalled, tool-specific display content
 	ExcludedFromContext bool        // If true, message is stored but not sent to LLM
+	// MarkAgentDone, when true, also writes conversations.agent_working=false
+	// inside the same Tx as the message INSERT. The list-patch stream's
+	// OnCommit hook then fires exactly one patch carrying both the new
+	// message AND working=false, instead of two patches where the first
+	// snapshots the stale pre-flip working=true row. Mirrors the
+	// SetAgentWorking(true)-before-recordMessage ordering AcceptUserMessage
+	// uses on the Send side.
+	MarkAgentDone bool
 }
 
 // CreateMessage creates a new message
@@ -750,7 +758,16 @@ func (db *DB) CreateMessage(ctx context.Context, params CreateMessageParams) (*g
 			DisplayData:         displayDataJSON,
 			ExcludedFromContext: params.ExcludedFromContext,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		if params.MarkAgentDone {
+			return q.SetConversationAgentWorking(ctx, generated.SetConversationAgentWorkingParams{
+				AgentWorking:   false,
+				ConversationID: params.ConversationID,
+			})
+		}
+		return nil
 	})
 	return &message, err
 }

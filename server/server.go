@@ -954,6 +954,14 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 			"retryable":  message.ErrorRetryable,
 		}
 	}
+	// End-of-turn agent and error messages mean the agent has finished. Fold
+	// the agent_working=false flip into the message-INSERT Tx so a single
+	// OnCommit hook emits one list-patch carrying both, instead of two
+	// patches where the first carries the stale pre-flip working=true row
+	// snapshot — that was the scroll-behavior.spec.ts "agent-thinking stays
+	// visible" flake. Mirror of AcceptUserMessage's SetAgentWorking(true)-
+	// before-recordMessage ordering on the Send side.
+	markAgentDone := (messageType == db.MessageTypeAgent || messageType == db.MessageTypeError) && message.EndOfTurn
 	createdMsg, err := s.db.CreateMessage(ctx, db.CreateMessageParams{
 		ConversationID:      conversationID,
 		Type:                messageType,
@@ -962,9 +970,23 @@ func (s *Server) recordMessage(ctx context.Context, conversationID string, messa
 		UsageData:           usage,
 		DisplayData:         displayDataToStore,
 		ExcludedFromContext: message.ExcludedFromContext,
+		MarkAgentDone:       markAgentDone,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create message: %w", err)
+	}
+	// Sync the conversation manager's in-memory agentWorking flag and fire
+	// onStateChange / onDone now that the DB has committed. SetAgentWorking
+	// also rewrites conversations.agent_working, but the value is already
+	// false from the message-INSERT Tx above, so the recompute on this
+	// commit finds no list-state change and emits no extra patch.
+	if markAgentDone {
+		s.mu.Lock()
+		mgr := s.activeConversations[conversationID]
+		s.mu.Unlock()
+		if mgr != nil {
+			mgr.SetAgentWorking(false)
+		}
 	}
 
 	// Update conversation's last updated timestamp for correct ordering
@@ -1094,10 +1116,11 @@ func (s *Server) notifySubscribersNewMessage(ctx context.Context, conversationID
 	// Convert the single new message to API format
 	apiMessages := toAPIMessages([]generated.Message{*newMsg})
 
-	// Update agent working state based on message type
+	// End-of-turn agent_working flip already happened in recordMessage,
+	// in the same Tx as the message INSERT, so its list-patch already
+	// carries working=false. Just drain any queued messages now that
+	// we're idle.
 	if isAgentEndOfTurn(newMsg) {
-		manager.SetAgentWorking(false)
-		// Process any queued messages now that the agent is done
 		go manager.drainPendingMessages(s)
 	}
 
