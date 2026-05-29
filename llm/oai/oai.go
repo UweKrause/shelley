@@ -260,6 +260,26 @@ var (
 		SupportsImages:     false,
 	}
 
+	DeepseekV4FlashFireworks = Model{
+		UserName:           "deepseek-v4-flash-fireworks",
+		ModelName:          "accounts/fireworks/models/deepseek-v4-flash",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   false,
+		UseSimplifiedPatch: false,
+		SupportsImages:     false,
+	}
+
+	Qwen36PlusFireworks = Model{
+		UserName:           "qwen3.6-plus-fireworks",
+		ModelName:          "accounts/fireworks/models/qwen3p6-plus",
+		URL:                FireworksURL,
+		APIKeyEnv:          FireworksAPIKeyEnv,
+		IsReasoningModel:   false,
+		UseSimplifiedPatch: false,
+		SupportsImages:     false,
+	}
+
 	MoonshotKimiK2 = Model{
 		UserName:           "moonshot-kimi-k2",
 		ModelName:          "moonshot-v1-auto",
@@ -410,6 +430,26 @@ var (
 		SupportsImages:     true,
 	}
 
+	GPT54Mini = Model{
+		UserName:           "gpt-5.4-mini",
+		ModelName:          "gpt-5.4-mini",
+		URL:                OpenAIURL,
+		APIKeyEnv:          OpenAIAPIKeyEnv,
+		IsReasoningModel:   false,
+		UseSimplifiedPatch: false,
+		SupportsImages:     true,
+	}
+
+	GPT54Nano = Model{
+		UserName:           "gpt-5.4-nano",
+		ModelName:          "gpt-5.4-nano",
+		URL:                OpenAIURL,
+		APIKeyEnv:          OpenAIAPIKeyEnv,
+		IsReasoningModel:   false,
+		UseSimplifiedPatch: false,
+		SupportsImages:     true,
+	}
+
 	GPT53Codex = Model{
 		UserName:           "gpt-5.3-codex",
 		ModelName:          "gpt-5.3-codex",
@@ -464,6 +504,8 @@ var ModelsRegistry = []Model{
 	GPT55,
 	GPT55Pro,
 	GPT54,
+	GPT54Mini,
+	GPT54Nano,
 	GPT5,
 	GPT5Mini,
 	GPT5Nano,
@@ -485,12 +527,14 @@ var ModelsRegistry = []Model{
 	// Fireworks / misc providers
 	FireworksDeepseekV3,
 	DeepseekV4ProFireworks,
+	DeepseekV4FlashFireworks,
 	FireworksLlama4Maverick,
 	MoonshotKimiK2,
 	MistralMedium,
 	DevstralSmall,
 	GLM51Fireworks,
 	KimiK26Fireworks,
+	Qwen36PlusFireworks,
 	GPTOSS120B,
 	GPTOSS20B,
 	LlamaCPP,
@@ -1007,8 +1051,10 @@ func (s *Service) TokenContextWindow() int {
 		return 256000
 	case "gpt-oss-20b", "gpt-oss-120b":
 		return 128000
-	case "accounts/fireworks/models/deepseek-v4-pro":
+	case "accounts/fireworks/models/deepseek-v4-pro", "accounts/fireworks/models/deepseek-v4-flash":
 		return 1048576
+	case "accounts/fireworks/models/qwen3p6-plus":
+		return 128000
 	case "gpt-5.1", "gpt-5.1-mini", "gpt-5.1-nano":
 		return 256000
 	default:

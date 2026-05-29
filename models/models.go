@@ -404,6 +404,40 @@ func All() []Model {
 			},
 		},
 		{
+			ID:              "gpt-5.4-mini",
+			Provider:        ProviderOpenAI,
+			Description:     "GPT-5.4 mini",
+			RequiredEnvVars: []string{"OPENAI_API_KEY"},
+			GatewayEnabled:  true,
+			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
+				if config.OpenAIAPIKey == "" {
+					return nil, fmt.Errorf("gpt-5.4-mini requires OPENAI_API_KEY")
+				}
+				svc := &oai.ResponsesService{Model: oai.GPT54Mini, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
+				if url := config.getOpenAIURL(); url != "" {
+					svc.ModelURL = url
+				}
+				return svc, nil
+			},
+		},
+		{
+			ID:              "gpt-5.4-nano",
+			Provider:        ProviderOpenAI,
+			Description:     "GPT-5.4 nano",
+			RequiredEnvVars: []string{"OPENAI_API_KEY"},
+			GatewayEnabled:  true,
+			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
+				if config.OpenAIAPIKey == "" {
+					return nil, fmt.Errorf("gpt-5.4-nano requires OPENAI_API_KEY")
+				}
+				svc := &oai.ResponsesService{Model: oai.GPT54Nano, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
+				if url := config.getOpenAIURL(); url != "" {
+					svc.ModelURL = url
+				}
+				return svc, nil
+			},
+		},
+		{
 			ID:              "gpt-5.3-codex",
 			Provider:        ProviderOpenAI,
 			Description:     "GPT-5.3 Codex",
@@ -449,6 +483,40 @@ func All() []Model {
 				svc := &gem.Service{APIKey: config.GeminiAPIKey, Model: "gemini-3-flash-preview", HTTPC: httpc}
 				if url := config.getGeminiURL(); url != "" {
 					svc.URL = url
+				}
+				return svc, nil
+			},
+		},
+		{
+			ID:              "deepseek-v4-flash-fireworks",
+			Provider:        ProviderFireworks,
+			Description:     "DeepSeek V4 Flash on Fireworks",
+			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
+			GatewayEnabled:  true,
+			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
+				if config.FireworksAPIKey == "" {
+					return nil, fmt.Errorf("deepseek-v4-flash-fireworks requires FIREWORKS_API_KEY")
+				}
+				svc := &oai.Service{Model: oai.DeepseekV4FlashFireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
+				if url := config.getFireworksURL(); url != "" {
+					svc.ModelURL = url
+				}
+				return svc, nil
+			},
+		},
+		{
+			ID:              "qwen3.6-plus-fireworks",
+			Provider:        ProviderFireworks,
+			Description:     "Qwen 3.6 Plus on Fireworks",
+			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
+			GatewayEnabled:  true,
+			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
+				if config.FireworksAPIKey == "" {
+					return nil, fmt.Errorf("qwen3.6-plus-fireworks requires FIREWORKS_API_KEY")
+				}
+				svc := &oai.Service{Model: oai.Qwen36PlusFireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
+				if url := config.getFireworksURL(); url != "" {
+					svc.ModelURL = url
 				}
 				return svc, nil
 			},
