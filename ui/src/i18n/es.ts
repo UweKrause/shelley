@@ -146,7 +146,7 @@ export const es: TranslationKeys = {
   tags: "Etiquetas",
   columnName: "Nombre",
   columnModelId: "ID del modelo",
-  columnProvider: "Proveedor",
+  columnProvider: "Forma de API",
   columnSource: "Origen",
   columnActions: "Acciones",
   columnImages: "Imágenes",

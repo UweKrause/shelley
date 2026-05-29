@@ -146,7 +146,7 @@ export const zhTW: TranslationKeys = {
   tags: "標籤",
   columnName: "名稱",
   columnModelId: "模型 ID",
-  columnProvider: "提供者",
+  columnProvider: "API 形式",
   columnSource: "來源",
   columnActions: "操作",
   columnImages: "圖片",

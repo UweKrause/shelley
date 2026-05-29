@@ -146,7 +146,7 @@ export const upgoer5: TranslationKeys = {
   tags: "Marks",
   columnName: "Name",
   columnModelId: "Brain Name",
-  columnProvider: "Who Made It",
+  columnProvider: "How To Talk To It",
   columnSource: "From",
   columnActions: "Do",
   columnImages: "Pictures",

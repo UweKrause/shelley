@@ -10,11 +10,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/client"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/models"
+	"shelley.exe.dev/modelsources"
 	"shelley.exe.dev/server"
 	_ "shelley.exe.dev/server/notifications/channels" // register channel types
 	"shelley.exe.dev/skills"
@@ -23,12 +26,14 @@ import (
 )
 
 type GlobalConfig struct {
-	DBPath          string
-	Debug           bool
-	Model           string
-	PredictableOnly bool
-	ConfigPath      string
-	DefaultModel    string
+	DBPath                string
+	Debug                 bool
+	Model                 string
+	PredictableOnly       bool
+	ConfigPath            string
+	DefaultModel          string
+	DisableLLMIntegration bool
+	DisableGateway        bool
 }
 
 func main() {
@@ -41,6 +46,8 @@ func main() {
 	flag.BoolVar(&global.PredictableOnly, "predictable-only", false, "Use only the predictable service, ignoring all other models")
 	flag.StringVar(&global.ConfigPath, "config", "", "Path to shelley.json configuration file (optional)")
 	flag.StringVar(&global.DefaultModel, "default-model", defaultModelID, "Default model for web UI")
+	flag.BoolVar(&global.DisableLLMIntegration, "disable-llm-integration", false, "Ignore any discovered exe.dev llm integration")
+	flag.BoolVar(&global.DisableGateway, "disable-gateway", false, "Ignore llm_gateway from shelley.json")
 
 	// Custom usage function
 	flag.Usage = func() {
@@ -49,6 +56,7 @@ func main() {
 		flag.PrintDefaults()
 		fmt.Fprintf(flag.CommandLine.Output(), "\nCommands:\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  serve [flags]                 Start the web server\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  models [flags]                List the models the server would expose, without starting it\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  client [flags] <subcommand>   CLI client (chat, read, list, archive) (experimental)\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  skill <cat|ls|new> [name]     Read, list, or create skills\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  dtach <new|attach> ...        Persistent PTY sessions over a Unix socket\n")
@@ -70,6 +78,8 @@ func main() {
 	switch command {
 	case "serve":
 		runServe(global, args[1:])
+	case "models":
+		runModels(global, args[1:])
 	case "client":
 		client.Run(args[1:])
 	case "skill":
@@ -159,7 +169,7 @@ func runServe(global GlobalConfig, args []string) {
 	server.DBPath = global.DBPath
 
 	// Build LLM configuration
-	llmConfig := buildLLMConfig(logger, global.ConfigPath, global.DefaultModel, database)
+	llmConfig := buildLLMConfig(global, logger, database)
 
 	// Initialize LLM service manager (includes custom model support via database)
 	llmManager := server.NewLLMServiceManager(llmConfig)
@@ -174,9 +184,7 @@ func runServe(global GlobalConfig, args []string) {
 	svr := server.NewServer(database, llmManager, toolSetConfig, logger, global.PredictableOnly, llmConfig.DefaultModel, *requireHeader)
 	svr.Banner = *banner
 
-	// Seed notification channels from config file if DB is empty (one-time migration)
-	svr.SeedNotificationChannelsFromConfig(llmConfig.NotificationChannels)
-	// Load notification channels from DB
+	// Load notification channels from DB.
 	svr.ReloadNotificationChannels()
 
 	// Resolve socket path: "none" disables the Unix socket listener
@@ -356,70 +364,135 @@ func setupToolSetConfig(llmProvider claudetool.LLMServiceProvider, llmManager se
 	}
 }
 
-// buildLLMConfig constructs LLMConfig from environment variables and optional config file
-func buildLLMConfig(logger *slog.Logger, configPath, defaultModel string, database *db.DB) *server.LLMConfig {
+// buildLLMConfig composes the set of built-in models the server should
+// expose. Sources are evaluated in order; the first to claim a model ID
+// wins:
+//
+//  1. Each discovered exe.dev "llm" integration (sorted by name; when
+//     2+, subsequent integrations get an "@<name>" suffix on their
+//     model IDs so the union of all served models is visible).
+//  2. The exe.dev gateway from shelley.json's llm_gateway, if set.
+//     Any non-empty provider env var overrides the gateway's implicit
+//     credential for that provider (legacy behavior).
+//  3. Provider env vars (ANTHROPIC_API_KEY, ...) when no gateway is set.
+//  4. Predictable (always available).
+//
+// Custom DB-backed models load on top of the returned set.
+func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) *server.LLMConfig {
+	configPath := global.ConfigPath
+	defaultModel := global.DefaultModel
+	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+	openAIKey := os.Getenv("OPENAI_API_KEY")
+	geminiKey := os.Getenv("GEMINI_API_KEY")
+	fireworksKey := os.Getenv("FIREWORKS_API_KEY")
+
 	llmCfg := &server.LLMConfig{
-		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
-		OpenAIAPIKey:    os.Getenv("OPENAI_API_KEY"),
-		GeminiAPIKey:    os.Getenv("GEMINI_API_KEY"),
-		FireworksAPIKey: os.Getenv("FIREWORKS_API_KEY"),
-		DefaultModel:    defaultModel,
-		DB:              database,
-		Logger:          logger,
+		DefaultModel: defaultModel,
+		DB:           database,
+		Logger:       logger,
 	}
 
+	var sources []modelsources.Source
+
+	// 1. exe.dev LLM integrations.
+	var integs []*modelsources.LLMIntegrationConfig
+	if !global.DisableLLMIntegration {
+		integs = modelsources.DiscoverLLMIntegrations(context.Background(), nil, logger)
+	}
+	for i, integ := range integs {
+		suffix := ""
+		if len(integs) > 1 && i > 0 {
+			suffix = "@" + integ.Name
+		}
+		sources = append(sources, modelsources.LLMIntegration(integ, suffix))
+	}
+
+	var gateway string
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				logger.Warn("Failed to read config file", "path", configPath, "error", err)
+		if err == nil {
+			var cfg struct {
+				LLMGateway   string `json:"llm_gateway"`
+				DefaultModel string `json:"default_model"`
 			}
-			return llmCfg
-		}
-
-		var cfg struct {
-			LLMGateway           string           `json:"llm_gateway"`
-			DefaultModel         string           `json:"default_model"`
-			NotificationChannels []map[string]any `json:"notification_channels"`
-		}
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			logger.Warn("Failed to parse config file", "path", configPath, "error", err)
-			return llmCfg
-		}
-
-		if cfg.LLMGateway != "" {
-			gateway := strings.TrimSuffix(cfg.LLMGateway, "/")
-			llmCfg.Gateway = gateway
-			logger.Info("Using LLM gateway", "gateway", gateway)
-
-			// When using a gateway, default all API keys to "implicit" unless otherwise set
-			if llmCfg.AnthropicAPIKey == "" {
-				llmCfg.AnthropicAPIKey = "implicit"
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				logger.Warn("Failed to parse config file", "path", configPath, "error", err)
+			} else {
+				gateway = strings.TrimSuffix(cfg.LLMGateway, "/")
+				if cfg.DefaultModel != "" && llmCfg.DefaultModel == "" {
+					llmCfg.DefaultModel = cfg.DefaultModel
+					logger.Info("Using default model from config", "model", cfg.DefaultModel)
+				}
 			}
-			if llmCfg.OpenAIAPIKey == "" {
-				llmCfg.OpenAIAPIKey = "implicit"
-			}
-			if llmCfg.GeminiAPIKey == "" {
-				llmCfg.GeminiAPIKey = "implicit"
-			}
-			if llmCfg.FireworksAPIKey == "" {
-				llmCfg.FireworksAPIKey = "implicit"
-			}
-		}
-
-		// Override default model from config file if present and not already set via flag
-		if cfg.DefaultModel != "" && llmCfg.DefaultModel == "" {
-			llmCfg.DefaultModel = cfg.DefaultModel
-			logger.Info("Using default model from config", "model", cfg.DefaultModel)
-		}
-
-		if len(cfg.NotificationChannels) > 0 {
-			llmCfg.NotificationChannels = cfg.NotificationChannels
-			logger.Info("Notification channels configured", "count", len(cfg.NotificationChannels))
+		} else if !os.IsNotExist(err) {
+			logger.Warn("Failed to read config file", "path", configPath, "error", err)
 		}
 	}
 
+	if global.DisableGateway {
+		gateway = ""
+	}
+
+	// 2. Gateway (Anthropic, OpenAI, Fireworks). Per-provider env vars
+	// override the gateway's implicit credential for those three.
+	if gateway != "" {
+		logger.Info("Using LLM gateway", "gateway", gateway)
+		sources = append(sources, modelsources.Gateway(gateway, anthropicKey, openAIKey, fireworksKey))
+		// 2b. Gemini is not served by the gateway; let GEMINI_API_KEY,
+		// when set, supply Gemini models alongside the gateway.
+		if geminiKey != "" {
+			sources = append(sources, modelsources.Env("", "", geminiKey, ""))
+		}
+	} else if anthropicKey != "" || openAIKey != "" || geminiKey != "" || fireworksKey != "" {
+		// 3. Env vars.
+		sources = append(sources, modelsources.Env(anthropicKey, openAIKey, geminiKey, fireworksKey))
+	}
+
+	// 4. Predictable always available.
+	sources = append(sources, modelsources.Predictable())
+
+	httpc := llmhttp.NewClient(nil)
+	llmCfg.HTTPC = httpc
+	llmCfg.Models = modelsources.Build(models.All(), sources, httpc, logger)
 	return llmCfg
+}
+
+// runModels prints the materialized list of built-in models the server
+// would expose, without starting the server. Useful for confirming that
+// integrations/gateway/env-var precedence and discovery are configured
+// correctly. Does NOT include custom (DB-backed) models.
+func runModels(global GlobalConfig, args []string) {
+	fs := flag.NewFlagSet("models", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage: shelley [global-flags] models\n\n")
+		fmt.Fprintf(fs.Output(), "Prints the built-in models Shelley would expose with the current\n")
+		fmt.Fprintf(fs.Output(), "configuration (--config, env vars), without starting the server.\n")
+	}
+	fs.Parse(args)
+	if fs.NArg() > 0 {
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	logger := setupLogging(global.Debug)
+	llmCfg := buildLLMConfig(global, logger, nil)
+
+	defaultID := llmCfg.DefaultModel
+	if defaultID == "" {
+		defaultID = models.Default().ID
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tPROVIDER\tAPI TYPE\tBASE URL\tSOURCE\tDEFAULT")
+	for _, m := range llmCfg.Models {
+		mark := ""
+		if m.ID == defaultID {
+			mark = "*"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", m.ID, m.Provider, m.APIType, m.BaseURL, m.Source, mark)
+	}
+	tw.Flush()
+	fmt.Printf("\n%d models\n", len(llmCfg.Models))
 }
 
 // systemdListener returns a net.Listener from systemd socket activation.

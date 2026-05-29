@@ -166,7 +166,8 @@ const (
 	DataTypeOBJECT      = DataType(6)
 )
 
-const defaultEndpoint = "https://generativelanguage.googleapis.com/v1beta"
+// DefaultEndpoint is the Gemini API base URL used when Model.Endpoint is empty.
+const DefaultEndpoint = "https://generativelanguage.googleapis.com/v1beta"
 
 // APIError is returned by GenerateContent when the server returns a non-200 status.
 type APIError struct {
@@ -220,7 +221,7 @@ func (m Model) endpoint() string {
 	if m.Endpoint != "" {
 		return m.Endpoint
 	}
-	return defaultEndpoint
+	return DefaultEndpoint
 }
 
 func (m Model) httpc() *http.Client {

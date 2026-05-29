@@ -146,7 +146,7 @@ export const ja: TranslationKeys = {
   tags: "タグ",
   columnName: "名前",
   columnModelId: "モデルID",
-  columnProvider: "プロバイダー",
+  columnProvider: "API形式",
   columnSource: "ソース",
   columnActions: "操作",
   columnImages: "画像",

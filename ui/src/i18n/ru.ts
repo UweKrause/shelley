@@ -146,7 +146,7 @@ export const ru: TranslationKeys = {
   tags: "Теги",
   columnName: "Имя",
   columnModelId: "ID модели",
-  columnProvider: "Провайдер",
+  columnProvider: "Формат API",
   columnSource: "Источник",
   columnActions: "Действия",
   columnImages: "Изображения",

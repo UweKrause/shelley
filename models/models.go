@@ -19,7 +19,7 @@ import (
 	"shelley.exe.dev/models/modelsdev"
 )
 
-// Provider represents an LLM provider
+// Provider identifies an LLM upstream API family.
 type Provider string
 
 const (
@@ -30,129 +30,152 @@ const (
 	ProviderBuiltIn   Provider = "builtin"
 )
 
-// ModelSource describes where a model's configuration comes from
-type ModelSource string
+// SourceCustomLabel is the label used for custom (DB-backed) models.
+const SourceCustomLabel = "custom"
 
+// Provider-default BARE base URLs (origins). API-protocol path suffixes
+// like "/v1" or "/v1/messages" are appended by the per-API-type service
+// factory in Model.Build — keeping that knowledge out of the catalog
+// and out of any caller that hands a baseURL to Build.
 const (
-	SourceGateway ModelSource = "exe.dev gateway"
-	SourceEnvVar  ModelSource = "env"    // Will be combined with env var name
-	SourceCustom  ModelSource = "custom" // User-configured custom model
+	DefaultAnthropicBaseURL = "https://api.anthropic.com"
+	DefaultOpenAIBaseURL    = "https://api.openai.com"
+	DefaultFireworksBaseURL = "https://api.fireworks.ai/inference"
+	DefaultGeminiBaseURL    = "https://generativelanguage.googleapis.com"
 )
 
-// Model represents a configured LLM model in Shelley
+// APIType identifies the wire protocol Shelley uses to talk to a model.
+// Multiple APIType values can share a Provider (notably OpenAI: Responses
+// API vs. Chat Completions).
+type APIType string
+
+const (
+	APITypeAnthropicMessages APIType = "anthropic-messages"
+	APITypeOpenAIResponses   APIType = "openai-responses"
+	APITypeOpenAIChat        APIType = "openai-chat-completions"
+	APITypeGemini            APIType = "gemini"
+	APITypeBuiltIn           APIType = "builtin"
+)
+
+// Model is one entry in Shelley's catalog of built-in models.
 type Model struct {
-	// ID is the user-facing identifier for this model
+	// ID is the user-facing identifier.
 	ID string
 
-	// Provider is the LLM provider (OpenAI, Anthropic, etc.)
+	// Provider is the upstream API family.
 	Provider Provider
 
-	// Description is a human-readable description
+	// Description is a human-readable description.
 	Description string
 
-	// Tags is a comma-separated list of tags (e.g., "slug")
+	// Tags is a comma-separated list of tags (e.g. "slug").
 	Tags string
 
-	// RequiredEnvVars are the environment variables required for this model
-	RequiredEnvVars []string
+	// APIModelName is the model name sent on the wire (e.g. "claude-opus-4-7").
+	// Also used to match against an LLM integration's /v1/models allow-list.
+	APIModelName string
 
-	// GatewayEnabled indicates whether this model is available when using a gateway
-	GatewayEnabled bool
+	// APIType identifies the wire protocol used to talk to this model.
+	APIType APIType
 
-	// Factory creates an llm.Service instance for this model
-	Factory func(config *Config, httpc *http.Client) (llm.Service, error)
+	// DefaultBaseURL is the base URL the provider package uses when no
+	// explicit URL is configured. Shown in `shelley models` so users can
+	// see exactly which endpoint each model will be reached at.
+	DefaultBaseURL string
+
+	// Build constructs an llm.Service for this model given a BARE base
+	// URL (origin + any non-API prefix, e.g. "https://llm.int.exe.xyz"
+	// or "" for the provider package default), an API key, and an HTTP
+	// client. The function is responsible for appending its own
+	// API-protocol path ("/v1", "/v1/messages", "/v1beta", ...) — the
+	// caller never encodes those.
+	Build func(baseURL, apiKey string, httpc *http.Client) llm.Service
 }
 
-// Source returns a human-readable description of where this model's configuration comes from.
-// For example: "exe.dev gateway", "$ANTHROPIC_API_KEY", etc.
-func (m Model) Source(cfg *Config) string {
-	// Predictable model has no source
-	if m.ID == "predictable" {
-		return ""
-	}
+// Built is a ready-to-use model, shaped to mirror a row in the custom
+// models database table. The Manager treats built-in and custom models
+// uniformly via this struct.
+type Built struct {
+	ID          string
+	DisplayName string
+	Provider    Provider
+	Source      string // human-readable origin ("exe.dev gateway", "$ANTHROPIC_API_KEY", "custom", ...)
+	Tags        string
+	Service     llm.Service
 
-	// Check if using gateway with implicit keys
-	if cfg.Gateway != "" {
-		// Gateway is configured - check if this model is using gateway (implicit key)
-		switch m.Provider {
-		case ProviderAnthropic:
-			if cfg.AnthropicAPIKey == "implicit" {
-				return string(SourceGateway)
-			}
-			return "$ANTHROPIC_API_KEY"
-		case ProviderOpenAI:
-			if cfg.OpenAIAPIKey == "implicit" {
-				return string(SourceGateway)
-			}
-			return "$OPENAI_API_KEY"
-		case ProviderFireworks:
-			if cfg.FireworksAPIKey == "implicit" {
-				return string(SourceGateway)
-			}
-			return "$FIREWORKS_API_KEY"
-		case ProviderGemini:
-			if cfg.GeminiAPIKey == "implicit" {
-				return string(SourceGateway)
-			}
-			return "$GEMINI_API_KEY"
-		}
-	}
+	// APIType is the wire protocol used to talk to this model.
+	APIType APIType
 
-	// No gateway - use env var names based on RequiredEnvVars
-	if len(m.RequiredEnvVars) > 0 {
-		return "$" + m.RequiredEnvVars[0]
-	}
-	return ""
+	// BaseURL is the resolved upstream base URL (after applying any source
+	// override on top of the catalog's DefaultBaseURL).
+	BaseURL string
 }
 
-// Config holds the configuration needed to create LLM services
+// Config holds runtime configuration for the Manager. Built-in models
+// are passed in pre-materialized; custom models are loaded from DB.
 type Config struct {
-	// API keys for each provider
-	AnthropicAPIKey string
-	OpenAIAPIKey    string
-	GeminiAPIKey    string
-	FireworksAPIKey string
-
-	// Gateway is the base URL of the LLM gateway (optional)
-	// If set, model-specific suffixes will be appended
-	Gateway string
+	// Models is the set of ready-to-use built-in models, in display order.
+	Models []Built
 
 	Logger *slog.Logger
 
-	// Database for recording LLM requests (optional)
+	// DB holds custom models; optional.
 	DB *db.DB
+
+	// HTTPC is the shared HTTP client used to back custom models loaded
+	// from DB. If nil, a default llmhttp client is created.
+	HTTPC *http.Client
 }
 
-// getAnthropicURL returns the Anthropic API URL, with gateway suffix if gateway is set
-func (c *Config) getAnthropicURL() string {
-	if c.Gateway != "" {
-		return c.Gateway + "/_/gateway/anthropic/v1/messages"
+// --- Catalog ---------------------------------------------------------------
+
+// antSvc / oaiResponsesSvc / oaiChatSvc / gemSvc are factories for the
+// per-provider llm.Service constructors used by Model.Build.
+//
+// The `baseURL` parameter is a BARE origin/prefix with NO API-protocol
+// path on it (e.g. "https://llm.int.exe.xyz" or "" for the package
+// default). Each factory knows its own protocol's path suffix and
+// appends it before constructing the service. Keeping that knowledge
+// inside the factory means modelsources never has to encode
+// per-API-type paths like "/v1" or "/v1/messages".
+func antSvc(modelName string) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+		s := &ant.Service{APIKey: apiKey, Model: modelName, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, SupportsImages_: true}
+		if baseURL != "" {
+			s.URL = baseURL + "/v1/messages"
+		}
+		return s
 	}
-	return "" // use default from ant package
 }
 
-// getOpenAIURL returns the OpenAI API URL, with gateway suffix if gateway is set
-func (c *Config) getOpenAIURL() string {
-	if c.Gateway != "" {
-		return c.Gateway + "/_/gateway/openai/v1"
+func oaiResponsesSvc(model oai.Model) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+		s := &oai.ResponsesService{Model: model, APIKey: apiKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
+		if baseURL != "" {
+			s.ModelURL = baseURL + "/v1"
+		}
+		return s
 	}
-	return "" // use default from oai package
 }
 
-// getGeminiURL returns the Gemini API URL, with gateway suffix if gateway is set
-func (c *Config) getGeminiURL() string {
-	if c.Gateway != "" {
-		return c.Gateway + "/_/gateway/gemini/v1/models/generate"
+func oaiChatSvc(model oai.Model, providerName string) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+		s := &oai.Service{Model: model, APIKey: apiKey, HTTPC: httpc, ProviderName: providerName}
+		if baseURL != "" {
+			s.ModelURL = baseURL + "/v1"
+		}
+		return s
 	}
-	return "" // use default from gem package
 }
 
-// getFireworksURL returns the Fireworks API URL, with gateway suffix if gateway is set
-func (c *Config) getFireworksURL() string {
-	if c.Gateway != "" {
-		return c.Gateway + "/_/gateway/fireworks/inference/v1"
+func gemSvc(modelName string) func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+	return func(baseURL, apiKey string, httpc *http.Client) llm.Service {
+		s := &gem.Service{APIKey: apiKey, Model: modelName, HTTPC: httpc, SupportsImages_: true}
+		if baseURL != "" {
+			s.URL = baseURL + "/v1beta"
+		}
+		return s
 	}
-	return "" // use default from oai package
 }
 
 // All returns all available models in Shelley.
@@ -183,377 +206,142 @@ func (c *Config) getFireworksURL() string {
 func All() []Model {
 	return []Model{
 		{
-			ID:              "claude-opus-4.8",
-			Provider:        ProviderAnthropic,
-			Description:     "Claude Opus 4.8 (default)",
-			RequiredEnvVars: []string{"ANTHROPIC_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.AnthropicAPIKey == "" {
-					return nil, fmt.Errorf("claude-opus-4.8 requires ANTHROPIC_API_KEY")
-				}
-				svc := &ant.Service{APIKey: config.AnthropicAPIKey, Model: ant.Claude48Opus, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
-				if url := config.getAnthropicURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "claude-opus-4.8", Provider: ProviderAnthropic,
+			Description: "Claude Opus 4.8 (default)", APIModelName: ant.Claude48Opus,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude48Opus),
 		},
 		{
-			ID:              "gpt-5.5",
-			Provider:        ProviderOpenAI,
-			Description:     "GPT-5.5",
-			RequiredEnvVars: []string{"OPENAI_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.OpenAIAPIKey == "" {
-					return nil, fmt.Errorf("gpt-5.5 requires OPENAI_API_KEY")
-				}
-				svc := &oai.ResponsesService{Model: oai.GPT55, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
-				if url := config.getOpenAIURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "gpt-5.5", Provider: ProviderOpenAI,
+			Description: "GPT-5.5", APIModelName: oai.GPT55.ModelName,
+			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
+			Build: oaiResponsesSvc(oai.GPT55),
 		},
 		{
-			ID:              "claude-opus-4.6",
-			Provider:        ProviderAnthropic,
-			Description:     "Claude Opus 4.6",
-			RequiredEnvVars: []string{"ANTHROPIC_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.AnthropicAPIKey == "" {
-					return nil, fmt.Errorf("claude-opus-4.6 requires ANTHROPIC_API_KEY")
-				}
-				svc := &ant.Service{APIKey: config.AnthropicAPIKey, Model: ant.Claude46Opus, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
-				if url := config.getAnthropicURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "claude-opus-4.6", Provider: ProviderAnthropic,
+			Description: "Claude Opus 4.6", APIModelName: ant.Claude46Opus,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude46Opus),
 		},
 		{
-			ID:              "glm-5.1-fireworks",
-			Provider:        ProviderFireworks,
-			Description:     "GLM-5.1 on Fireworks",
-			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.FireworksAPIKey == "" {
-					return nil, fmt.Errorf("glm-5.1-fireworks requires FIREWORKS_API_KEY")
-				}
-				svc := &oai.Service{Model: oai.GLM51Fireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
-				if url := config.getFireworksURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "glm-5.1-fireworks", Provider: ProviderFireworks,
+			Description: "GLM-5.1 on Fireworks", APIModelName: oai.GLM51Fireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.GLM51Fireworks, "fireworks"),
 		},
 		{
-			ID:              "gemini-3-pro",
-			Provider:        ProviderGemini,
-			Description:     "Gemini 3 Pro",
-			RequiredEnvVars: []string{"GEMINI_API_KEY"},
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.GeminiAPIKey == "" {
-					return nil, fmt.Errorf("gemini-3-pro requires GEMINI_API_KEY")
-				}
-				svc := &gem.Service{APIKey: config.GeminiAPIKey, Model: "gemini-3-pro-preview", HTTPC: httpc}
-				if url := config.getGeminiURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "gemini-3-pro", Provider: ProviderGemini,
+			Description: "Gemini 3 Pro", APIModelName: "gemini-3-pro-preview",
+			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
+			Build: gemSvc("gemini-3-pro-preview"),
 		},
 		{
-			ID:              "kimi-k2.6-fireworks",
-			Provider:        ProviderFireworks,
-			Description:     "Kimi K2.6 on Fireworks",
-			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.FireworksAPIKey == "" {
-					return nil, fmt.Errorf("kimi-k2.6-fireworks requires FIREWORKS_API_KEY")
-				}
-				svc := &oai.Service{Model: oai.KimiK26Fireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
-				if url := config.getFireworksURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "kimi-k2.6-fireworks", Provider: ProviderFireworks,
+			Description: "Kimi K2.6 on Fireworks", APIModelName: oai.KimiK26Fireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.KimiK26Fireworks, "fireworks"),
 		},
 		{
-			ID:              "deepseek-v4-pro-fireworks",
-			Provider:        ProviderFireworks,
-			Description:     "DeepSeek V4 Pro on Fireworks",
-			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.FireworksAPIKey == "" {
-					return nil, fmt.Errorf("deepseek-v4-pro-fireworks requires FIREWORKS_API_KEY")
-				}
-				svc := &oai.Service{Model: oai.DeepseekV4ProFireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
-				if url := config.getFireworksURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "deepseek-v4-pro-fireworks", Provider: ProviderFireworks,
+			Description: "DeepSeek V4 Pro on Fireworks", APIModelName: oai.DeepseekV4ProFireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.DeepseekV4ProFireworks, "fireworks"),
 		},
 		{
-			ID:              "claude-opus-4.7",
-			Provider:        ProviderAnthropic,
-			Description:     "Claude Opus 4.7",
-			RequiredEnvVars: []string{"ANTHROPIC_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.AnthropicAPIKey == "" {
-					return nil, fmt.Errorf("claude-opus-4.7 requires ANTHROPIC_API_KEY")
-				}
-				svc := &ant.Service{APIKey: config.AnthropicAPIKey, Model: ant.Claude47Opus, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
-				if url := config.getAnthropicURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "claude-opus-4.7", Provider: ProviderAnthropic,
+			Description: "Claude Opus 4.7", APIModelName: ant.Claude47Opus,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude47Opus),
 		},
 		{
-			ID:              "claude-opus-4.5",
-			Provider:        ProviderAnthropic,
-			Description:     "Claude Opus 4.5",
-			RequiredEnvVars: []string{"ANTHROPIC_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.AnthropicAPIKey == "" {
-					return nil, fmt.Errorf("claude-opus-4.5 requires ANTHROPIC_API_KEY")
-				}
-				svc := &ant.Service{APIKey: config.AnthropicAPIKey, Model: ant.Claude45Opus, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
-				if url := config.getAnthropicURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "claude-opus-4.5", Provider: ProviderAnthropic,
+			Description: "Claude Opus 4.5", APIModelName: ant.Claude45Opus,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude45Opus),
 		},
 		{
-			ID:              "claude-sonnet-4.6",
-			Provider:        ProviderAnthropic,
-			Description:     "Claude Sonnet 4.6",
-			RequiredEnvVars: []string{"ANTHROPIC_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.AnthropicAPIKey == "" {
-					return nil, fmt.Errorf("claude-sonnet-4.6 requires ANTHROPIC_API_KEY")
-				}
-				svc := &ant.Service{APIKey: config.AnthropicAPIKey, Model: ant.Claude46Sonnet, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
-				if url := config.getAnthropicURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "claude-sonnet-4.6", Provider: ProviderAnthropic,
+			Description: "Claude Sonnet 4.6", APIModelName: ant.Claude46Sonnet,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude46Sonnet),
 		},
 		{
-			ID:              "claude-sonnet-4.5",
-			Provider:        ProviderAnthropic,
-			Description:     "Claude Sonnet 4.5",
-			RequiredEnvVars: []string{"ANTHROPIC_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.AnthropicAPIKey == "" {
-					return nil, fmt.Errorf("claude-sonnet-4.5 requires ANTHROPIC_API_KEY")
-				}
-				svc := &ant.Service{APIKey: config.AnthropicAPIKey, Model: ant.Claude45Sonnet, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
-				if url := config.getAnthropicURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "claude-sonnet-4.5", Provider: ProviderAnthropic,
+			Description: "Claude Sonnet 4.5", APIModelName: ant.Claude45Sonnet,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude45Sonnet),
 		},
 		{
-			ID:              "claude-haiku-4.5",
-			Provider:        ProviderAnthropic,
-			Description:     "Claude Haiku 4.5",
-			Tags:            "slug-backup",
-			RequiredEnvVars: []string{"ANTHROPIC_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.AnthropicAPIKey == "" {
-					return nil, fmt.Errorf("claude-haiku-4.5 requires ANTHROPIC_API_KEY")
-				}
-				svc := &ant.Service{APIKey: config.AnthropicAPIKey, Model: ant.Claude45Haiku, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium}
-				if url := config.getAnthropicURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "claude-haiku-4.5", Provider: ProviderAnthropic, Tags: "slug-backup",
+			Description: "Claude Haiku 4.5", APIModelName: ant.Claude45Haiku,
+			APIType: APITypeAnthropicMessages, DefaultBaseURL: DefaultAnthropicBaseURL,
+			Build: antSvc(ant.Claude45Haiku),
 		},
 		{
-			ID:              "gpt-5.4",
-			Provider:        ProviderOpenAI,
-			Description:     "GPT-5.4",
-			RequiredEnvVars: []string{"OPENAI_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.OpenAIAPIKey == "" {
-					return nil, fmt.Errorf("gpt-5.4 requires OPENAI_API_KEY")
-				}
-				svc := &oai.ResponsesService{Model: oai.GPT54, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
-				if url := config.getOpenAIURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "gpt-5.4", Provider: ProviderOpenAI,
+			Description: "GPT-5.4", APIModelName: oai.GPT54.ModelName,
+			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
+			Build: oaiResponsesSvc(oai.GPT54),
 		},
 		{
-			ID:              "gpt-5.4-mini",
-			Provider:        ProviderOpenAI,
-			Description:     "GPT-5.4 mini",
-			RequiredEnvVars: []string{"OPENAI_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.OpenAIAPIKey == "" {
-					return nil, fmt.Errorf("gpt-5.4-mini requires OPENAI_API_KEY")
-				}
-				svc := &oai.ResponsesService{Model: oai.GPT54Mini, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
-				if url := config.getOpenAIURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "gpt-5.4-mini", Provider: ProviderOpenAI,
+			Description: "GPT-5.4 mini", APIModelName: oai.GPT54Mini.ModelName,
+			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
+			Build: oaiResponsesSvc(oai.GPT54Mini),
 		},
 		{
-			ID:              "gpt-5.4-nano",
-			Provider:        ProviderOpenAI,
-			Description:     "GPT-5.4 nano",
-			RequiredEnvVars: []string{"OPENAI_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.OpenAIAPIKey == "" {
-					return nil, fmt.Errorf("gpt-5.4-nano requires OPENAI_API_KEY")
-				}
-				svc := &oai.ResponsesService{Model: oai.GPT54Nano, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
-				if url := config.getOpenAIURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "gpt-5.4-nano", Provider: ProviderOpenAI,
+			Description: "GPT-5.4 nano", APIModelName: oai.GPT54Nano.ModelName,
+			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
+			Build: oaiResponsesSvc(oai.GPT54Nano),
 		},
 		{
-			ID:              "gpt-5.3-codex",
-			Provider:        ProviderOpenAI,
-			Description:     "GPT-5.3 Codex",
-			RequiredEnvVars: []string{"OPENAI_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.OpenAIAPIKey == "" {
-					return nil, fmt.Errorf("gpt-5.3-codex requires OPENAI_API_KEY")
-				}
-				svc := &oai.ResponsesService{Model: oai.GPT53Codex, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
-				if url := config.getOpenAIURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "gpt-5.3-codex", Provider: ProviderOpenAI,
+			Description: "GPT-5.3 Codex", APIModelName: oai.GPT53Codex.ModelName,
+			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
+			Build: oaiResponsesSvc(oai.GPT53Codex),
 		},
 		{
-			ID:              "gpt-5.2-codex",
-			Provider:        ProviderOpenAI,
-			Description:     "GPT-5.2 Codex",
-			RequiredEnvVars: []string{"OPENAI_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.OpenAIAPIKey == "" {
-					return nil, fmt.Errorf("gpt-5.2-codex requires OPENAI_API_KEY")
-				}
-				svc := &oai.ResponsesService{Model: oai.GPT52Codex, APIKey: config.OpenAIAPIKey, HTTPC: httpc, ThinkingLevel: llm.ThinkingLevelMedium, ProviderName: "openai"}
-				if url := config.getOpenAIURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "gpt-5.2-codex", Provider: ProviderOpenAI,
+			Description: "GPT-5.2 Codex", APIModelName: oai.GPT52Codex.ModelName,
+			APIType: APITypeOpenAIResponses, DefaultBaseURL: DefaultOpenAIBaseURL,
+			Build: oaiResponsesSvc(oai.GPT52Codex),
 		},
 		{
-			ID:              "gemini-3-flash",
-			Provider:        ProviderGemini,
-			Description:     "Gemini 3 Flash",
-			RequiredEnvVars: []string{"GEMINI_API_KEY"},
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.GeminiAPIKey == "" {
-					return nil, fmt.Errorf("gemini-3-flash requires GEMINI_API_KEY")
-				}
-				svc := &gem.Service{APIKey: config.GeminiAPIKey, Model: "gemini-3-flash-preview", HTTPC: httpc}
-				if url := config.getGeminiURL(); url != "" {
-					svc.URL = url
-				}
-				return svc, nil
-			},
+			ID: "gemini-3-flash", Provider: ProviderGemini,
+			Description: "Gemini 3 Flash", APIModelName: "gemini-3-flash-preview",
+			APIType: APITypeGemini, DefaultBaseURL: DefaultGeminiBaseURL,
+			Build: gemSvc("gemini-3-flash-preview"),
 		},
 		{
-			ID:              "deepseek-v4-flash-fireworks",
-			Provider:        ProviderFireworks,
-			Description:     "DeepSeek V4 Flash on Fireworks",
-			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.FireworksAPIKey == "" {
-					return nil, fmt.Errorf("deepseek-v4-flash-fireworks requires FIREWORKS_API_KEY")
-				}
-				svc := &oai.Service{Model: oai.DeepseekV4FlashFireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
-				if url := config.getFireworksURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "deepseek-v4-flash-fireworks", Provider: ProviderFireworks,
+			Description: "DeepSeek V4 Flash on Fireworks", APIModelName: oai.DeepseekV4FlashFireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.DeepseekV4FlashFireworks, "fireworks"),
 		},
 		{
-			ID:              "qwen3.6-plus-fireworks",
-			Provider:        ProviderFireworks,
-			Description:     "Qwen 3.6 Plus on Fireworks",
-			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.FireworksAPIKey == "" {
-					return nil, fmt.Errorf("qwen3.6-plus-fireworks requires FIREWORKS_API_KEY")
-				}
-				svc := &oai.Service{Model: oai.Qwen36PlusFireworks, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
-				if url := config.getFireworksURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "qwen3.6-plus-fireworks", Provider: ProviderFireworks,
+			Description: "Qwen 3.6 Plus on Fireworks", APIModelName: oai.Qwen36PlusFireworks.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.Qwen36PlusFireworks, "fireworks"),
 		},
 		{
-			ID:              "gpt-oss-20b-fireworks",
-			Provider:        ProviderFireworks,
-			Description:     "GPT-OSS 20B on Fireworks",
-			Tags:            "slug",
-			RequiredEnvVars: []string{"FIREWORKS_API_KEY"},
-			GatewayEnabled:  true,
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				if config.FireworksAPIKey == "" {
-					return nil, fmt.Errorf("gpt-oss-20b-fireworks requires FIREWORKS_API_KEY")
-				}
-				svc := &oai.Service{Model: oai.GPTOSS20B, APIKey: config.FireworksAPIKey, HTTPC: httpc, ProviderName: "fireworks"}
-				if url := config.getFireworksURL(); url != "" {
-					svc.ModelURL = url
-				}
-				return svc, nil
-			},
+			ID: "gpt-oss-20b-fireworks", Provider: ProviderFireworks, Tags: "slug",
+			Description: "GPT-OSS 20B on Fireworks", APIModelName: oai.GPTOSS20B.ModelName,
+			APIType: APITypeOpenAIChat, DefaultBaseURL: DefaultFireworksBaseURL,
+			Build: oaiChatSvc(oai.GPTOSS20B, "fireworks"),
 		},
 		{
-			ID:          "predictable",
-			Provider:    ProviderBuiltIn,
-			Description: "Deterministic test model (no API key)",
-			// Used for testing; should be harmless.
-			GatewayEnabled:  true,
-			RequiredEnvVars: []string{},
-			Factory: func(config *Config, httpc *http.Client) (llm.Service, error) {
-				return loop.NewPredictableService(), nil
-			},
+			ID: "predictable", Provider: ProviderBuiltIn,
+			Description:    "Deterministic test model (no API key)",
+			APIType:        APITypeBuiltIn,
+			DefaultBaseURL: "-",
+			Build:          func(url, apiKey string, httpc *http.Client) llm.Service { return loop.NewPredictableService() },
 		},
 	}
 }
 
-// ByID returns the model with the given ID, or nil if not found
+// ByID returns the model with the given ID, or nil if not found.
 func ByID(id string) *Model {
 	for _, m := range All() {
 		if m.ID == id {
@@ -563,7 +351,7 @@ func ByID(id string) *Model {
 	return nil
 }
 
-// IDs returns all model IDs (not including aliases)
+// IDs returns all catalog model IDs.
 func IDs() []string {
 	models := All()
 	ids := make([]string, len(models))
@@ -573,7 +361,7 @@ func IDs() []string {
 	return ids
 }
 
-// Default returns the default model
+// Default returns the default catalog model.
 func Default() Model {
 	if m := ByID("claude-opus-4.8"); m != nil {
 		return *m
@@ -581,118 +369,85 @@ func Default() Model {
 	return All()[0]
 }
 
-// Manager manages LLM services for all configured models
+// --- Manager ---------------------------------------------------------------
+
+// Manager owns the live set of LLM services for a Shelley server.
 type Manager struct {
 	mu         sync.RWMutex
 	services   map[string]serviceEntry
-	modelOrder []string // ordered list of model IDs (built-in first, then custom)
+	modelOrder []string
 	logger     *slog.Logger
-	db         *db.DB       // for custom models and LLM request recording
-	httpc      *http.Client // HTTP client with recording middleware
-	cfg        *Config      // retained for refreshing custom models
+	db         *db.DB
+	httpc      *http.Client
 }
 
 type serviceEntry struct {
 	service     llm.Service
 	provider    Provider
 	modelID     string
-	source      string // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
-	displayName string // For custom models, the user-provided display name
-	tags        string // For custom models, user-provided tags
+	source      string
+	displayName string
+	tags        string
+	baseURL     string
+	apiType     APIType
 }
 
 // ConfigInfo is an optional interface that services can implement to provide configuration details for logging
 type ConfigInfo interface {
-	// ConfigDetails returns human-readable configuration info (e.g., URL, model name)
 	ConfigDetails() map[string]string
 }
 
-// loggingService wraps an llm.Service to log request completion with usage information
+// loggingService wraps an llm.Service with request/usage logging.
 type loggingService struct {
 	service  llm.Service
 	logger   *slog.Logger
 	modelID  string
 	provider Provider
-	db       *db.DB
 }
 
-// Do wraps the underlying service's Do method with logging and database recording
 func (l *loggingService) Do(ctx context.Context, request *llm.Request) (*llm.Response, error) {
 	start := time.Now()
-
-	// Add model ID and provider to context for the HTTP transport
 	ctx = llmhttp.WithModelID(ctx, l.modelID)
 	ctx = llmhttp.WithProvider(ctx, string(l.provider))
-
-	// Call the underlying service
 	response, err := l.service.Do(ctx, request)
+	durationSeconds := time.Since(start).Seconds()
 
-	duration := time.Since(start)
-	durationSeconds := duration.Seconds()
-
-	// Log the completion with usage information
 	if err != nil {
-		logAttrs := []any{
-			"model", l.modelID,
-			"duration_seconds", durationSeconds,
-		}
-
-		// Add configuration details if available
+		logAttrs := []any{"model", l.modelID, "duration_seconds", durationSeconds}
 		if configProvider, ok := l.service.(ConfigInfo); ok {
 			for k, v := range configProvider.ConfigDetails() {
 				logAttrs = append(logAttrs, k, v)
 			}
 		}
-
 		logAttrs = append(logAttrs, "error", err)
 		l.logger.Error("LLM request failed", logAttrs...)
-	} else {
-		// Log successful completion with usage info
-		logAttrs := []any{
-			"model", l.modelID,
-			"duration_seconds", durationSeconds,
-		}
-
-		// Add usage information if available
-		if !response.Usage.IsZero() {
-			logAttrs = append(
-				logAttrs,
-				"input_tokens", response.Usage.InputTokens,
-				"output_tokens", response.Usage.OutputTokens,
-				"cost_usd", response.Usage.CostUSD,
-			)
-			if response.Usage.CacheCreationInputTokens > 0 {
-				logAttrs = append(logAttrs, "cache_creation_input_tokens", response.Usage.CacheCreationInputTokens)
-			}
-			if response.Usage.CacheReadInputTokens > 0 {
-				logAttrs = append(logAttrs, "cache_read_input_tokens", response.Usage.CacheReadInputTokens)
-			}
-		}
-
-		l.logger.Info("LLM request completed", logAttrs...)
+		return response, err
 	}
 
+	logAttrs := []any{"model", l.modelID, "duration_seconds", durationSeconds}
+	if !response.Usage.IsZero() {
+		logAttrs = append(
+			logAttrs,
+			"input_tokens", response.Usage.InputTokens,
+			"output_tokens", response.Usage.OutputTokens,
+			"cost_usd", response.Usage.CostUSD,
+		)
+		if response.Usage.CacheCreationInputTokens > 0 {
+			logAttrs = append(logAttrs, "cache_creation_input_tokens", response.Usage.CacheCreationInputTokens)
+		}
+		if response.Usage.CacheReadInputTokens > 0 {
+			logAttrs = append(logAttrs, "cache_read_input_tokens", response.Usage.CacheReadInputTokens)
+		}
+	}
+	l.logger.Info("LLM request completed", logAttrs...)
 	return response, err
 }
 
-func (l *loggingService) Provider() string { return l.service.Provider() }
+func (l *loggingService) Provider() string        { return l.service.Provider() }
+func (l *loggingService) TokenContextWindow() int { return l.service.TokenContextWindow() }
+func (l *loggingService) MaxImageDimension() int  { return l.service.MaxImageDimension() }
+func (l *loggingService) MaxImageBytes() int      { return l.service.MaxImageBytes() }
 
-// TokenContextWindow delegates to the underlying service
-func (l *loggingService) TokenContextWindow() int {
-	return l.service.TokenContextWindow()
-}
-
-// MaxImageDimension delegates to the underlying service
-func (l *loggingService) MaxImageDimension() int {
-	return l.service.MaxImageDimension()
-}
-
-// MaxImageBytes delegates to the underlying service
-func (l *loggingService) MaxImageBytes() int {
-	return l.service.MaxImageBytes()
-}
-
-// UseSimplifiedPatch delegates to the underlying service if it supports it
 func (l *loggingService) UseSimplifiedPatch() bool {
 	if sp, ok := l.service.(llm.SimplifiedPatcher); ok {
 		return sp.UseSimplifiedPatch()
@@ -700,9 +455,6 @@ func (l *loggingService) UseSimplifiedPatch() bool {
 	return false
 }
 
-// SupportsServerSideWebSearch delegates to the underlying service if it
-// implements claudetool.ServerSideWebSearchCapable. We use a structural
-// interface here to avoid importing claudetool from models.
 func (l *loggingService) SupportsServerSideWebSearch() bool {
 	type capable interface{ SupportsServerSideWebSearch() bool }
 	if c, ok := l.service.(capable); ok {
@@ -711,8 +463,6 @@ func (l *loggingService) SupportsServerSideWebSearch() bool {
 	return false
 }
 
-// SupportsImages delegates to the underlying service if it implements
-// claudetool.ImageCapable. Defaults to true for backwards compatibility.
 func (l *loggingService) SupportsImages() bool {
 	type capable interface{ SupportsImages() bool }
 	if c, ok := l.service.(capable); ok {
@@ -721,154 +471,126 @@ func (l *loggingService) SupportsImages() bool {
 	return true
 }
 
-// NewManager creates a new Manager with all models configured
+// NewManager registers the supplied built-in models, then loads custom
+// models from cfg.DB.
 func NewManager(cfg *Config) (*Manager, error) {
-	manager := &Manager{
-		services: make(map[string]serviceEntry),
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	httpc := cfg.HTTPC
+	if httpc == nil {
+		httpc = llmhttp.NewClient(nil)
+	}
+	m := &Manager{
+		services: map[string]serviceEntry{},
 		logger:   cfg.Logger,
 		db:       cfg.DB,
+		httpc:    httpc,
 	}
 
-	// Create HTTP client with Shelley headers. The custom transport adds
-	// User-Agent and conversation-ID headers based on context values.
-	httpc := llmhttp.NewClient(nil)
-
-	// Store the HTTP client and config for use with custom models
-	manager.httpc = httpc
-	manager.cfg = cfg
-
-	// Load built-in models first
-	useGateway := cfg.Gateway != ""
-	for _, model := range All() {
-		// Skip non-gateway-enabled models when using a gateway
-		if useGateway && !model.GatewayEnabled {
-			continue
+	for _, b := range cfg.Models {
+		dn := b.DisplayName
+		if dn == "" {
+			dn = b.ID
 		}
-		svc, err := model.Factory(cfg, httpc)
-		if err != nil {
-			// Model not available (e.g., missing API key) - skip it
-			continue
+		m.services[b.ID] = serviceEntry{
+			service:     b.Service,
+			provider:    b.Provider,
+			modelID:     b.ID,
+			source:      b.Source,
+			displayName: dn,
+			tags:        b.Tags,
+			baseURL:     b.BaseURL,
+			apiType:     b.APIType,
 		}
-
-		manager.services[model.ID] = serviceEntry{
-			service:     svc,
-			provider:    model.Provider,
-			modelID:     model.ID,
-			source:      model.Source(cfg),
-			displayName: model.ID, // built-in models use ID as display name
-			tags:        model.Tags,
-		}
-		manager.modelOrder = append(manager.modelOrder, model.ID)
+		m.modelOrder = append(m.modelOrder, b.ID)
+		logger.Info("Registered model", "id", b.ID, "source", b.Source)
 	}
 
-	// Load custom models from database
-	if err := manager.loadCustomModels(); err != nil && cfg.Logger != nil {
+	if err := m.loadCustomModels(); err != nil && cfg.Logger != nil {
 		cfg.Logger.Warn("Failed to load custom models", "error", err)
 	}
-
-	return manager, nil
+	return m, nil
 }
 
-// loadCustomModels loads custom models from the database into the manager.
-// It adds them after built-in models in the order.
-// It must only be called during construction (before the Manager is shared).
 func (m *Manager) loadCustomModels() error {
 	if m.db == nil {
 		return nil
 	}
-
 	dbModels, err := m.db.GetModels(context.Background())
 	if err != nil {
 		return err
 	}
-
 	for _, model := range dbModels {
-		// Skip if this model ID is already registered (built-in takes precedence)
 		if _, exists := m.services[model.ModelID]; exists {
 			continue
 		}
-
 		svc := m.createServiceFromModel(&model)
 		if svc == nil {
 			continue
 		}
-
 		m.services[model.ModelID] = serviceEntry{
 			service:     svc,
 			provider:    Provider(model.ProviderType),
 			modelID:     model.ModelID,
-			source:      string(SourceCustom),
+			source:      SourceCustomLabel,
 			displayName: model.DisplayName,
 			tags:        model.Tags,
 		}
 		m.modelOrder = append(m.modelOrder, model.ModelID)
 	}
-
 	return nil
 }
 
-// RefreshCustomModels reloads custom models from the database.
-// Call this after adding or removing custom models via the UI.
+// RefreshCustomModels reloads custom models from the database. Call this
+// after adding or removing custom models via the UI.
 func (m *Manager) RefreshCustomModels() error {
 	if m.db == nil {
 		return nil
 	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// Remove existing custom models from services and modelOrder
 	newOrder := make([]string, 0, len(m.modelOrder))
 	for _, id := range m.modelOrder {
 		entry, ok := m.services[id]
-		if ok && entry.source != string(SourceCustom) {
+		if ok && entry.source != SourceCustomLabel {
 			newOrder = append(newOrder, id)
 		} else {
 			delete(m.services, id)
 		}
 	}
 	m.modelOrder = newOrder
-
-	// Reload custom models
 	return m.loadCustomModels()
 }
 
-// GetService returns the LLM service for the given model ID, wrapped with logging
+// GetService returns the LLM service for modelID, wrapped with logging.
 func (m *Manager) GetService(modelID string) (llm.Service, error) {
 	m.mu.RLock()
 	entry, ok := m.services[modelID]
 	m.mu.RUnlock()
-	// entry is a by-value copy; safe to use after unlock because
-	// evicted services are not torn down or closed.
 	if !ok {
 		return nil, fmt.Errorf("unsupported model: %s", modelID)
 	}
-
-	// Wrap with logging if we have a logger
 	if m.logger != nil {
 		return &loggingService{
 			service:  entry.service,
 			logger:   m.logger,
 			modelID:  entry.modelID,
 			provider: entry.provider,
-			db:       m.db,
 		}, nil
 	}
 	return entry.service, nil
 }
 
-// GetAvailableModels returns a list of available model IDs.
-// Returns union of built-in models (in order) followed by custom models.
 func (m *Manager) GetAvailableModels() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	// Return a copy to prevent external modification
 	result := make([]string, len(m.modelOrder))
 	copy(result, m.modelOrder)
 	return result
 }
 
-// HasModel reports whether the manager has a service for the given model ID
 func (m *Manager) HasModel(modelID string) bool {
 	m.mu.RLock()
 	_, ok := m.services[modelID]
@@ -876,14 +598,15 @@ func (m *Manager) HasModel(modelID string) bool {
 	return ok
 }
 
-// ModelInfo contains display name, tags, and source for a model
+// ModelInfo contains display name, tags, source, base URL, and API type for a model.
 type ModelInfo struct {
 	DisplayName string
 	Tags        string
-	Source      string // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY", "custom")
+	Source      string
+	BaseURL     string
+	APIType     string
 }
 
-// GetModelInfo returns the display name, tags, and source for a model
 func (m *Manager) GetModelInfo(modelID string) *ModelInfo {
 	m.mu.RLock()
 	entry, ok := m.services[modelID]
@@ -891,14 +614,10 @@ func (m *Manager) GetModelInfo(modelID string) *ModelInfo {
 	if !ok {
 		return nil
 	}
-	return &ModelInfo{
-		DisplayName: entry.displayName,
-		Tags:        entry.tags,
-		Source:      entry.source,
-	}
+	return &ModelInfo{DisplayName: entry.displayName, Tags: entry.tags, Source: entry.source, BaseURL: entry.baseURL, APIType: string(entry.apiType)}
 }
 
-// createServiceFromModel creates an LLM service from a database model configuration
+// createServiceFromModel creates an LLM service from a database model configuration.
 func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 	supportsImages := resolveSupportsImages(model.ProviderType, model.ModelName, model.ImageSupport)
 	switch model.ProviderType {
@@ -916,13 +635,9 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			APIKey:   model.ApiKey,
 			ModelURL: model.Endpoint,
 			Model: oai.Model{
-				UserName:           "",
-				ModelName:          model.ModelName,
-				URL:                model.Endpoint,
-				APIKeyEnv:          "",
-				IsReasoningModel:   false,
-				UseSimplifiedPatch: false,
-				SupportsImages:     supportsImages,
+				ModelName:      model.ModelName,
+				URL:            model.Endpoint,
+				SupportsImages: supportsImages,
 			},
 			MaxTokens:    int(model.MaxTokens),
 			HTTPC:        m.httpc,
@@ -933,13 +648,9 @@ func (m *Manager) createServiceFromModel(model *generated.Model) llm.Service {
 			APIKey:   model.ApiKey,
 			ModelURL: model.Endpoint,
 			Model: oai.Model{
-				UserName:           "",
-				ModelName:          model.ModelName,
-				URL:                model.Endpoint,
-				APIKeyEnv:          "",
-				IsReasoningModel:   false,
-				UseSimplifiedPatch: false,
-				SupportsImages:     supportsImages,
+				ModelName:      model.ModelName,
+				URL:            model.Endpoint,
+				SupportsImages: supportsImages,
 			},
 			MaxTokens:       int(model.MaxTokens),
 			HTTPC:           m.httpc,

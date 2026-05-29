@@ -58,9 +58,22 @@ interface BuiltInModel {
   id: string;
   display_name?: string;
   source?: string;
+  base_url?: string;
+  api_type?: string;
   ready: boolean;
   supports_images?: boolean;
 }
+
+// API_TYPE_LABELS maps the wire-protocol enum values from server-side
+// models.APIType to the same human-readable strings the custom-model form
+// shows for its Provider/API Format field.
+const API_TYPE_LABELS: Record<string, string> = {
+  "anthropic-messages": "Anthropic",
+  "openai-chat-completions": "OpenAI (Chat API)",
+  "openai-responses": "OpenAI (Responses API)",
+  gemini: "Google Gemini",
+  builtin: "Built-in",
+};
 
 interface FormData {
   display_name: string;
@@ -615,125 +628,140 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
             <p className="models-empty-hint">{t("noModelsHint")}</p>
           </div>
         ) : (
-          <table className="models-table">
-            <thead>
-              <tr>
-                <th>{t("columnName")}</th>
-                <th>{t("columnModelId")}</th>
-                <th>{t("columnProvider")}</th>
-                <th>{t("columnSource")}</th>
-                <th>{t("endpoint")}</th>
-                <th>{t("tags")}</th>
-                <th className="models-table-images-col">{t("columnImages")}</th>
-                <th className="models-table-actions-col">
-                  <span className="sr-only">{t("columnActions")}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {builtInModels
-                .filter((m) => m.id !== "predictable")
-                .map((model) => (
-                  <tr key={model.id} className="models-table-row models-table-row-builtin">
-                    <td className="models-table-name">{model.display_name || model.id}</td>
-                    <td className="models-table-mono">{model.id}</td>
-                    <td className="models-table-muted">—</td>
-                    <td>{model.source}</td>
-                    <td className="models-table-muted">—</td>
-                    <td className="models-table-muted">—</td>
+          <div className="models-modal-scroll">
+            <table className="models-table">
+              <thead>
+                <tr>
+                  <th>{t("columnName")}</th>
+                  <th>{t("columnModelId")}</th>
+                  <th>{t("columnProvider")}</th>
+                  <th>{t("columnSource")}</th>
+                  <th>{t("endpoint")}</th>
+                  <th>{t("tags")}</th>
+                  <th className="models-table-images-col">{t("columnImages")}</th>
+                  <th className="models-table-actions-col">
+                    <span className="sr-only">{t("columnActions")}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {builtInModels
+                  .filter((m) => m.id !== "predictable")
+                  .map((model) => (
+                    <tr key={model.id} className="models-table-row models-table-row-builtin">
+                      <td className="models-table-name">{model.display_name || model.id}</td>
+                      <td className="models-table-mono">{model.id}</td>
+                      <td
+                        className={
+                          model.api_type && API_TYPE_LABELS[model.api_type]
+                            ? undefined
+                            : "models-table-muted"
+                        }
+                      >
+                        {(model.api_type && API_TYPE_LABELS[model.api_type]) || "—"}
+                      </td>
+                      <td>{model.source}</td>
+                      <td
+                        className={model.base_url ? "models-table-endpoint" : "models-table-muted"}
+                        title={model.base_url || undefined}
+                      >
+                        {model.base_url || "—"}
+                      </td>
+                      <td className="models-table-muted">—</td>
+                      <td className="models-table-images">
+                        <ImageSupportIndicator
+                          mode="resolved"
+                          resolved={model.supports_images ?? true}
+                        />
+                      </td>
+                      <td className="models-table-actions"></td>
+                    </tr>
+                  ))}
+                {models.map((model) => (
+                  <tr key={model.model_id} className="models-table-row">
+                    <td className="models-table-name">{model.display_name}</td>
+                    <td className="models-table-mono">{model.model_name}</td>
+                    <td>{PROVIDER_LABELS[model.provider_type]}</td>
+                    <td className="models-table-muted">custom</td>
+                    <td className="models-table-endpoint" title={model.endpoint}>
+                      {model.endpoint}
+                    </td>
+                    <td className="models-table-tags" title={model.tags || undefined}>
+                      {model.tags || "—"}
+                    </td>
                     <td className="models-table-images">
                       <ImageSupportIndicator
-                        mode="resolved"
-                        resolved={model.supports_images ?? true}
+                        mode="custom"
+                        imageSupport={model.image_support ?? "auto"}
                       />
                     </td>
-                    <td className="models-table-actions"></td>
+                    <td className="models-table-actions">
+                      <button
+                        className="btn-icon"
+                        onClick={() => handleDuplicate(model)}
+                        title={t("duplicate")}
+                      >
+                        <svg
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          width="16"
+                          height="16"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        className="btn-icon"
+                        onClick={() => handleEdit(model)}
+                        title={t("editModel")}
+                      >
+                        <svg
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          width="16"
+                          height="16"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        className="btn-icon btn-danger"
+                        onClick={() => handleDelete(model.model_id)}
+                        title={t("delete_")}
+                      >
+                        <svg
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          width="16"
+                          height="16"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                          />
+                        </svg>
+                      </button>
+                    </td>
                   </tr>
                 ))}
-              {models.map((model) => (
-                <tr key={model.model_id} className="models-table-row">
-                  <td className="models-table-name">{model.display_name}</td>
-                  <td className="models-table-mono">{model.model_name}</td>
-                  <td>{PROVIDER_LABELS[model.provider_type]}</td>
-                  <td className="models-table-muted">custom</td>
-                  <td className="models-table-endpoint" title={model.endpoint}>
-                    {model.endpoint}
-                  </td>
-                  <td className="models-table-tags" title={model.tags || undefined}>
-                    {model.tags || "—"}
-                  </td>
-                  <td className="models-table-images">
-                    <ImageSupportIndicator
-                      mode="custom"
-                      imageSupport={model.image_support ?? "auto"}
-                    />
-                  </td>
-                  <td className="models-table-actions">
-                    <button
-                      className="btn-icon"
-                      onClick={() => handleDuplicate(model)}
-                      title={t("duplicate")}
-                    >
-                      <svg
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                        width="16"
-                        height="16"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                        />
-                      </svg>
-                    </button>
-                    <button
-                      className="btn-icon"
-                      onClick={() => handleEdit(model)}
-                      title={t("editModel")}
-                    >
-                      <svg
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                        width="16"
-                        height="16"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                    </button>
-                    <button
-                      className="btn-icon btn-danger"
-                      onClick={() => handleDelete(model.model_id)}
-                      title={t("delete_")}
-                    >
-                      <svg
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                        width="16"
-                        height="16"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                        />
-                      </svg>
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </Modal>

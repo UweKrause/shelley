@@ -146,7 +146,7 @@ export const vi: TranslationKeys = {
   tags: "Tags",
   columnName: "Tên",
   columnModelId: "ID model",
-  columnProvider: "Nhà cung cấp",
+  columnProvider: "Kiểu API",
   columnSource: "Nguồn",
   columnActions: "Hành động",
   columnImages: "Hình ảnh",

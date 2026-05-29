@@ -49,13 +49,12 @@ function ModelPicker({
     }
   }, [isOpen]);
 
-  // Determine if dropdown should open upward
+  // Open upward when there's more room above the trigger than below.
   useEffect(() => {
     if (isOpen && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const spaceBelow = window.innerHeight - rect.bottom;
-      const dropdownHeight = 320; // approximate max height
-      setOpenUpward(spaceBelow < dropdownHeight && rect.top > spaceBelow);
+      setOpenUpward(rect.top > spaceBelow);
     }
   }, [isOpen]);
 
@@ -103,6 +102,27 @@ function ModelPicker({
           className={`model-picker-dropdown ${openUpward ? "open-upward" : ""}`}
           ref={dropdownRef}
         >
+          {/* Pin the manage action at the top so it stays reachable on
+             narrow viewports where the bottom of the dropdown may be
+             clipped by the app-container or mobile browser chrome. */}
+          <button
+            className="model-picker-option model-picker-manage"
+            onClick={handleManageModels}
+            type="button"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M12 4v16m-8-8h16" />
+            </svg>
+            <span>Add / Remove Models...</span>
+          </button>
+          <div className="model-picker-divider" />
           <div className="model-picker-options">
             {models.map((model) => (
               <button
@@ -135,24 +155,6 @@ function ModelPicker({
               </button>
             ))}
           </div>
-          <div className="model-picker-divider" />
-          <button
-            className="model-picker-option model-picker-manage"
-            onClick={handleManageModels}
-            type="button"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M12 4v16m-8-8h16" />
-            </svg>
-            <span>Add / Remove Models...</span>
-          </button>
         </div>
       )}
     </div>

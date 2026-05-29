@@ -24,9 +24,20 @@ import (
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/loop"
 	"shelley.exe.dev/models"
+	"shelley.exe.dev/modelsources"
 	"shelley.exe.dev/server"
 	"shelley.exe.dev/slug"
 )
+
+// newPredictableLLMConfig returns an LLMConfig with only the predictable
+// built-in model registered. Tests that exercise the chat path use this
+// because the refactored manager no longer auto-registers built-ins.
+func newPredictableLLMConfig(logger *slog.Logger) *server.LLMConfig {
+	return &server.LLMConfig{
+		Models: modelsources.Build(models.All(), []modelsources.Source{modelsources.Predictable()}, nil, logger),
+		Logger: logger,
+	}
+}
 
 func TestServerEndToEnd(t *testing.T) {
 	// Create temporary database
@@ -48,7 +59,7 @@ func TestServerEndToEnd(t *testing.T) {
 	}))
 
 	// Create LLM service manager with predictable service
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 	predictableService := loop.NewPredictableService()
 	// For testing, we'll override the manager's service selection
 	_ = predictableService // will need to mock this properly
@@ -385,7 +396,7 @@ func TestConversationCleanup(t *testing.T) {
 
 	// Create server with predictable service
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 	svr := server.NewServer(database, llmManager, claudetool.ToolSetConfig{}, logger, false, "", "")
 
 	// Create a conversation
@@ -421,7 +432,7 @@ func TestSlugGeneration(t *testing.T) {
 
 	// Create server
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 	_ = server.NewServer(database, llmManager, claudetool.ToolSetConfig{}, logger, false, "", "")
 
 	// Test slug generation directly to avoid timing issues
@@ -502,7 +513,7 @@ func TestSanitizeSlug(t *testing.T) {
 func TestSlugGenerationWithPredictableService(t *testing.T) {
 	// Create server with predictable service only
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 
 	// Create a temporary database
 	tempDB := t.TempDir() + "/test.db"
@@ -609,7 +620,7 @@ func TestSSEIncrementalUpdates(t *testing.T) {
 
 	// Create logger and LLM manager
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 
 	// Create server
 	serviceInstance := server.NewServer(database, llmManager, claudetool.ToolSetConfig{}, logger, false, "", "")
@@ -934,7 +945,7 @@ func TestVersionEndpoint(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 	svr := server.NewServer(database, llmManager, claudetool.ToolSetConfig{}, logger, true, "", "")
 
 	mux := http.NewServeMux()
@@ -984,7 +995,7 @@ func TestScreenshotRouteServesImage(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 	svr := server.NewServer(database, llmManager, claudetool.ToolSetConfig{}, logger, true, "", "")
 
 	mux := http.NewServeMux()
@@ -1165,7 +1176,7 @@ func TestSubagentEndToEnd(t *testing.T) {
 	}))
 
 	// Create LLM service manager with predictable service
-	llmManager := server.NewLLMServiceManager(&server.LLMConfig{Logger: logger})
+	llmManager := server.NewLLMServiceManager(newPredictableLLMConfig(logger))
 
 	// Set up tools config
 	toolSetConfig := claudetool.ToolSetConfig{

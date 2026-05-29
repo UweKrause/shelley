@@ -2062,7 +2062,9 @@ type imageCapable interface {
 type ModelInfo struct {
 	ID               string `json:"id"`
 	DisplayName      string `json:"display_name,omitempty"`
-	Source           string `json:"source,omitempty"` // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
+	Source           string `json:"source,omitempty"`   // Human-readable source (e.g., "exe.dev gateway", "$ANTHROPIC_API_KEY")
+	BaseURL          string `json:"base_url,omitempty"` // Upstream origin (e.g., "https://llm.int.exe.xyz")
+	APIType          string `json:"api_type,omitempty"` // Wire protocol (e.g., "anthropic-messages")
 	Ready            bool   `json:"ready"`
 	MaxContextTokens int    `json:"max_context_tokens,omitempty"`
 	IsDefault        bool   `json:"is_default,omitempty"`
@@ -2100,6 +2102,8 @@ func (s *Server) getModelList() []ModelInfo {
 			if modelInfo := s.llmManager.GetModelInfo(id); modelInfo != nil {
 				info.DisplayName = modelInfo.DisplayName
 				info.Source = modelInfo.Source
+				info.BaseURL = modelInfo.BaseURL
+				info.APIType = modelInfo.APIType
 			}
 			modelList = append(modelList, info)
 		}

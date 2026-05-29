@@ -2,8 +2,10 @@ package server
 
 import (
 	"log/slog"
+	"net/http"
 
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/models"
 )
 
 // Link represents a link displayed in the UI overflow menu.
@@ -13,26 +15,22 @@ type Link struct {
 	URL     string `json:"url"`
 }
 
-// LLMConfig holds all configuration for LLM services
+// LLMConfig holds all configuration for LLM services.
 type LLMConfig struct {
-	// API keys for each provider
-	AnthropicAPIKey string
-	OpenAIAPIKey    string
-	GeminiAPIKey    string
-	FireworksAPIKey string
+	// Models is the list of ready-to-use built-in models. The server
+	// registers them as-is; custom models are loaded separately from DB.
+	Models []models.Built
 
-	// Gateway is the base URL of the LLM gateway (optional)
-	Gateway string
-
-	// DefaultModel is the default model to use (optional, defaults to models.Default())
+	// DefaultModel is the default model to use (optional, defaults to models.Default()).
 	DefaultModel string
 
-	// NotificationChannels is a list of notification channel configs from shelley.json.
-	// Each entry is a map with at least a "type" key, plus channel-specific fields.
-	NotificationChannels []map[string]any
-
-	// DB is the database for recording LLM requests (optional)
+	// DB is the database for custom models (optional).
 	DB *db.DB
+
+	// HTTPC is the shared HTTP client used by both the built-in models
+	// (already baked into Models[*].Service) and custom DB-backed models
+	// the Manager constructs. Pass nil to let the Manager create one.
+	HTTPC *http.Client
 
 	Logger *slog.Logger
 }

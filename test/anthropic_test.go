@@ -16,6 +16,8 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/db"
 	"shelley.exe.dev/llm"
+	"shelley.exe.dev/models"
+	"shelley.exe.dev/modelsources"
 	"shelley.exe.dev/server"
 )
 
@@ -43,12 +45,15 @@ func TestWithAnthropicAPI(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo, // Less verbose for real API test
 	}))
+	srcs := []modelsources.Source{modelsources.Env(
+		os.Getenv("ANTHROPIC_API_KEY"),
+		os.Getenv("OPENAI_API_KEY"),
+		os.Getenv("GEMINI_API_KEY"),
+		os.Getenv("FIREWORKS_API_KEY"),
+	)}
 	llmConfig := &server.LLMConfig{
-		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
-		OpenAIAPIKey:    os.Getenv("OPENAI_API_KEY"),
-		GeminiAPIKey:    os.Getenv("GEMINI_API_KEY"),
-		FireworksAPIKey: os.Getenv("FIREWORKS_API_KEY"),
-		Logger:          logger,
+		Models: modelsources.Build(models.All(), srcs, nil, logger),
+		Logger: logger,
 	}
 	llmManager := server.NewLLMServiceManager(llmConfig)
 

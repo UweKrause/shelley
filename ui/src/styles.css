@@ -4158,7 +4158,9 @@ svg {
   border-radius: 0.375rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   z-index: 1000;
-  max-height: 300px;
+  /* Grow with the viewport so the bottommost model is reachable on
+     short mobile screens. Capped so it doesn't dominate the page. */
+  max-height: min(70vh, 500px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -4173,7 +4175,10 @@ svg {
 
 .model-picker-options {
   overflow-y: auto;
-  max-height: 220px;
+  /* Fill whatever vertical space the dropdown has left after the pinned
+     manage button and divider. */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .model-picker-option {
@@ -6702,7 +6707,10 @@ svg {
 
 .models-table {
   width: 100%;
-  border-collapse: collapse;
+  /* `border-collapse: separate` keeps `position: sticky` working on the
+     thead cells (browsers don't honor sticky on collapsed-border <th>). */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.875rem;
   margin-bottom: 1rem;
 }
@@ -6720,6 +6728,15 @@ svg {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+/* The models modal scrolls inside its own wrapper, not inside .modal-body.
+   Otherwise rows would scroll into .modal-body's padding-top and visibly
+   bleed above the sticky thead. */
+.models-modal-scroll {
+  overflow-y: auto;
+  max-height: calc(80vh - 8rem);
+  margin: 0 -1rem;
 }
 
 .models-table tbody td {

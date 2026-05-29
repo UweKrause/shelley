@@ -146,7 +146,7 @@ export const zhCN: TranslationKeys = {
   tags: "标签",
   columnName: "名称",
   columnModelId: "模型 ID",
-  columnProvider: "提供商",
+  columnProvider: "API 形式",
   columnSource: "来源",
   columnActions: "操作",
   columnImages: "图片",

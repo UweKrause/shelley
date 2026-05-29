@@ -127,25 +127,17 @@ type LLMProvider interface {
 	RefreshCustomModels() error
 }
 
-// NewLLMServiceManager creates a new LLM service manager from config
+// NewLLMServiceManager creates a new LLM service manager from config.
 func NewLLMServiceManager(cfg *LLMConfig) LLMProvider {
-	// Convert LLMConfig to models.Config
-	modelConfig := &models.Config{
-		AnthropicAPIKey: cfg.AnthropicAPIKey,
-		OpenAIAPIKey:    cfg.OpenAIAPIKey,
-		GeminiAPIKey:    cfg.GeminiAPIKey,
-		FireworksAPIKey: cfg.FireworksAPIKey,
-		Gateway:         cfg.Gateway,
-		Logger:          cfg.Logger,
-		DB:              cfg.DB,
-	}
-
-	manager, err := models.NewManager(modelConfig)
+	manager, err := models.NewManager(&models.Config{
+		Models: cfg.Models,
+		Logger: cfg.Logger,
+		DB:     cfg.DB,
+		HTTPC:  cfg.HTTPC,
+	})
 	if err != nil {
-		// This shouldn't happen in practice, but handle it gracefully
 		cfg.Logger.Error("Failed to create models manager", "error", err)
 	}
-
 	return manager
 }
 
