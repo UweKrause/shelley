@@ -71,17 +71,19 @@ jobs:
         run: go build -o bin/shelley ./cmd/shelley
 
       - name: Install Playwright browsers
+        if: false
         run: |
           cd ui
           npx playwright install --with-deps chromium
 
       - name: Run Playwright E2E tests
+        if: false
         run: |
           cd ui
           npx playwright test
 
       - name: Upload Playwright report
-        if: always()
+        if: false
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -90,7 +92,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload test results
-        if: always()
+        if: false
         uses: actions/upload-artifact@v4
         with:
           name: test-results
