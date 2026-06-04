@@ -201,6 +201,47 @@ func TestDiscoverLLMIntegrationsReadsModelsJSONCatalog(t *testing.T) {
 	}
 }
 
+func TestDiscoverLLMIntegrationsUsesTeamHost(t *testing.T) {
+	oldMarker := exeDevMarkerPath
+	exeDevMarkerPath = t.TempDir()
+	t.Cleanup(func() { exeDevMarkerPath = oldMarker })
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body string
+		switch req.URL.Host + req.URL.Path {
+		case "reflection.int.exe.xyz/integrations":
+			body = `{"integrations":[{"name":"shared-llm","type":"llm","team":true}]}`
+		case "shared-llm.team.exe.xyz/models.json":
+			body = `{
+				"schema_version": 1,
+				"models": [
+					{"id":"openai/gpt-5.5","provider":"openai","native_id":"gpt-5.5","apis":["openai_responses"]}
+				]
+			}`
+		default:
+			t.Fatalf("unexpected discovery request: %s", req.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+
+	result := DiscoverLLMIntegrations(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if !result.Found {
+		t.Fatal("Found = false, want true")
+	}
+	if len(result.Integrations) != 1 {
+		t.Fatalf("integrations = %+v, want one", result.Integrations)
+	}
+	integ := result.Integrations[0]
+	if integ.Host != "shared-llm.team.exe.xyz" || integ.URL != "https://shared-llm.team.exe.xyz" {
+		t.Fatalf("integration = %+v, want team host/base URL", integ)
+	}
+}
+
 func TestMultipleLLMIntegrationsUnionWithSuffix(t *testing.T) {
 	primary := &LLMIntegrationConfig{
 		Name: "llm", Host: "llm.int.exe.xyz", URL: "https://llm.int.exe.xyz",

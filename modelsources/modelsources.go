@@ -5,6 +5,7 @@
 package modelsources
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"sort"
 	"time"
 
 	"shelley.exe.dev/llm/llmhttp"
@@ -257,6 +257,14 @@ type LLMIntegrationDiscoveryResult struct {
 type reflectionIntegration struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+	Team bool   `json:"team,omitempty"`
+}
+
+func (i reflectionIntegration) host() string {
+	if i.Team {
+		return fmt.Sprintf("%s.team.exe.xyz", i.Name)
+	}
+	return fmt.Sprintf("%s.int.exe.xyz", i.Name)
 }
 
 type reflectionIntegrationsResponse struct {
@@ -289,38 +297,43 @@ func DiscoverLLMIntegrations(ctx context.Context, httpc *http.Client, logger *sl
 		return LLMIntegrationDiscoveryResult{}
 	}
 
-	var names []string
+	var llmIntegrations []reflectionIntegration
 	for _, i := range ints.Integrations {
 		if i.Type == "llm" && i.Name != "" {
-			names = append(names, i.Name)
+			llmIntegrations = append(llmIntegrations, i)
 		}
 	}
-	if len(names) == 0 {
+	if len(llmIntegrations) == 0 {
 		return LLMIntegrationDiscoveryResult{}
 	}
-	sort.Strings(names)
+	slices.SortFunc(llmIntegrations, func(a, b reflectionIntegration) int {
+		if c := cmp.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.host(), b.host())
+	})
 
 	result := LLMIntegrationDiscoveryResult{Found: true}
-	for _, name := range names {
-		host := fmt.Sprintf("%s.int.exe.xyz", name)
+	for _, integ := range llmIntegrations {
+		host := integ.host()
 		base := "https://" + host
 		var catalog llmIntegrationModelCatalog
 		if !fetchJSON(ctx, httpc, base+"/models.json", &catalog) {
-			logger.Warn("LLM integration discovery: models.json fetch failed; skipping", "name", name, "host", host)
+			logger.Warn("LLM integration discovery: models.json fetch failed; skipping", "name", integ.Name, "host", host)
 			continue
 		}
 		models := integrationModelsFromCatalog(catalog)
 		if len(models) == 0 {
-			logger.Warn("LLM integration discovery: models.json returned no supported models; skipping", "name", name, "host", host)
+			logger.Warn("LLM integration discovery: models.json returned no supported models; skipping", "name", integ.Name, "host", host)
 			continue
 		}
 		result.Integrations = append(result.Integrations, &LLMIntegrationConfig{
-			Name:   name,
+			Name:   integ.Name,
 			Host:   host,
 			URL:    base,
 			Models: models,
 		})
-		logger.Info("Discovered exe.dev LLM integration", "name", name, "host", host, "models", len(models))
+		logger.Info("Discovered exe.dev LLM integration", "name", integ.Name, "host", host, "models", len(models))
 	}
 	return result
 }
