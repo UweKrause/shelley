@@ -46,6 +46,21 @@ type Node = DirNode | FileNode;
 const SEP = "\u0000";
 const pathKey = (parts: string[]) => parts.join(SEP);
 
+// Name of the synthetic top-level folder that commit-message rows are
+// slotted under. Exported so the diff viewer builds `treePath`s with
+// the exact same label the tree special-cases when sorting it first.
+export const COMMIT_MESSAGES_DIR = "Commit messages";
+
+// Child comparator: directories before files, the synthetic
+// "Commit messages" folder always first, then alphabetical by name.
+function compareNodes(a: Node, b: Node): number {
+  if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
+  const aCommit = a.kind === "dir" && a.name === COMMIT_MESSAGES_DIR;
+  const bCommit = b.kind === "dir" && b.name === COMMIT_MESSAGES_DIR;
+  if (aCommit !== bCommit) return aCommit ? -1 : 1;
+  return a.name.localeCompare(b.name);
+}
+
 function buildTree(entries: DiffFileTreeEntry[]): DirNode {
   const root: DirNode = { kind: "dir", name: "", path: "", children: [] };
   for (const e of entries) {
@@ -73,16 +88,30 @@ function buildTree(entries: DiffFileTreeEntry[]): DirNode {
     if (cur.children.some((c) => c.kind === "file" && c.name === leaf)) continue;
     cur.children.push({ kind: "file", name: leaf, path: pathKey(parts), entry: e });
   }
-  // Sort: directories first, alphabetical within each kind.
+  // Sort: directories first ("Commit messages" always leading),
+  // alphabetical within each kind.
   const sortRec = (d: DirNode) => {
-    d.children.sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+    d.children.sort(compareNodes);
     for (const c of d.children) if (c.kind === "dir") sortRec(c);
   };
   sortRec(root);
   return root;
+}
+
+// Walk the (sorted) tree depth-first and return the real paths of the
+// file rows in the exact order they render. The diff viewer uses this
+// for next/previous-file navigation so it tracks what the user sees in
+// the tree rather than the raw `files` order.
+export function treeRealPathOrder(entries: DiffFileTreeEntry[]): string[] {
+  const out: string[] = [];
+  const walk = (d: DirNode) => {
+    for (const c of d.children) {
+      if (c.kind === "dir") walk(c);
+      else out.push(c.entry.realPath);
+    }
+  };
+  walk(buildTree(entries));
+  return out;
 }
 
 // Walk into a directory, folding runs of single-child directories into

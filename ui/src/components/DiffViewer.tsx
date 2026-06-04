@@ -8,7 +8,11 @@ import VimToggle from "./VimToggle";
 import { GitDiffInfo, GitFileInfo, GitFileDiff, GitCommitMessage } from "../types";
 import DirectoryPickerModal from "./DirectoryPickerModal";
 import CommitPicker, { RangeToggle } from "./CommitPicker";
-import DiffFileTree, { DiffFileTreeEntry } from "./DiffFileTree";
+import DiffFileTree, {
+  DiffFileTreeEntry,
+  COMMIT_MESSAGES_DIR,
+  treeRealPathOrder,
+} from "./DiffFileTree";
 
 interface DiffViewerProps {
   cwd: string;
@@ -172,6 +176,12 @@ function DiffViewer({
   const isMobileRef = useRef(isMobile);
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneDiffEditor | null>(null);
+  // Real-path order matching how rows render in the sidebar tree, so
+  // next/previous-file navigation (the `<`/`>`/`.`/`,` keys) follows
+  // the drawer's sort instead of the raw `files` order. Kept in a ref
+  // because the nav callbacks are defined above where `treeEntries`
+  // (and thus this order) is computed.
+  const navOrderRef = useRef<string[]>([]);
   const monacoRef = useRef<typeof Monaco | null>(null);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const modeRef = useRef<ViewMode>(mode);
@@ -777,26 +787,28 @@ function DiffViewer({
   };
 
   const goToNextFile = useCallback(() => {
-    if (files.length === 0 || !selectedFile) return false;
-    const idx = files.findIndex((f) => f.path === selectedFile);
-    if (idx < files.length - 1) {
-      setSelectedFile(files[idx + 1].path);
+    const order = navOrderRef.current;
+    if (order.length === 0 || !selectedFile) return false;
+    const idx = order.indexOf(selectedFile);
+    if (idx >= 0 && idx < order.length - 1) {
+      setSelectedFile(order[idx + 1]);
       setCurrentChangeIndex(-1); // Reset to start of new file
       return true;
     }
     return false;
-  }, [files, selectedFile]);
+  }, [selectedFile]);
 
   const goToPreviousFile = useCallback(() => {
-    if (files.length === 0 || !selectedFile) return false;
-    const idx = files.findIndex((f) => f.path === selectedFile);
+    const order = navOrderRef.current;
+    if (order.length === 0 || !selectedFile) return false;
+    const idx = order.indexOf(selectedFile);
     if (idx > 0) {
-      setSelectedFile(files[idx - 1].path);
+      setSelectedFile(order[idx - 1]);
       setCurrentChangeIndex(-1); // Will go to last change when file loads
       return true;
     }
     return false;
-  }, [files, selectedFile]);
+  }, [selectedFile]);
 
   const goToNextChange = useCallback(() => {
     if (!editorRef.current) return;
@@ -1136,7 +1148,7 @@ function DiffViewer({
         const leaf = collides ? `${subject} (${shortHash})` : subject;
         return {
           realPath: f.path,
-          treePath: ["Commit messages", leaf],
+          treePath: [COMMIT_MESSAGES_DIR, leaf],
           decoration: msg?.isHead ? "HEAD" : undefined,
           decorationTitle: msg?.isHead ? `${hash} (HEAD)` : undefined,
         };
@@ -1148,6 +1160,15 @@ function DiffViewer({
       };
     });
   }, [files, commitMessages]);
+
+  // Order used by next/previous-file navigation. Mirrors the order rows
+  // render in the sidebar tree so `<`/`>`/`.`/`,` track what the user
+  // sees instead of the raw `files` order. Stored in a ref the nav
+  // callbacks (defined above) read at call time.
+  const navOrder = useMemo(() => treeRealPathOrder(treeEntries), [treeEntries]);
+  useEffect(() => {
+    navOrderRef.current = navOrder;
+  }, [navOrder]);
 
   // Title shown in the desktop sidebar layout's header: the open
   // file's path, or a commit-message subject (with HEAD suffix) when
@@ -1183,8 +1204,11 @@ function DiffViewer({
     }
   };
 
-  const currentFileIndex = files.findIndex((f) => f.path === selectedFile);
-  const hasNextFile = currentFileIndex < files.length - 1;
+  // Index into the tree-render order (not the raw `files` order) so the
+  // position indicator and prev/next affordances match the sidebar and
+  // the keyboard navigation.
+  const currentFileIndex = navOrder.indexOf(selectedFile ?? "");
+  const hasNextFile = currentFileIndex >= 0 && currentFileIndex < navOrder.length - 1;
   const hasPrevFile = currentFileIndex > 0;
 
   // Single combined commit picker (replaces the prior pair of <select>s).
@@ -1368,7 +1392,9 @@ function DiffViewer({
   );
 
   const fileIndexIndicator =
-    files.length > 1 && currentFileIndex >= 0 ? `(${currentFileIndex + 1}/${files.length})` : null;
+    navOrder.length > 1 && currentFileIndex >= 0
+      ? `(${currentFileIndex + 1}/${navOrder.length})`
+      : null;
 
   const fileSelector = (
     <div className="diff-viewer-file-selector-wrapper">
