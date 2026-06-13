@@ -123,6 +123,32 @@ type ConversationManager struct {
 	// onDone is called when the agent finishes working (transitions to not working).
 	// Used by subagents to notify their parent conversation.
 	onDone func()
+
+	// subagentWaitOwners counts in-flight synchronous (wait=true) subagent
+	// tool calls targeting THIS (subagent) conversation. While it is >0, a
+	// caller is blocked inside the subagent tool and is expected to deliver
+	// this subagent's response via the tool's own return value, so
+	// SetAgentWorking must NOT also fire the async onDone notification (that
+	// would duplicate the response). The count is read under cm.mu atomically
+	// with the working-state transition, and it is keyed by the manager
+	// itself — i.e. the immutable conversation ID — so it is immune to the
+	// slug renaming ("rev1" → "rev1-4") that defeated the older,
+	// history-parsing suppression.
+	//
+	// In practice there is at most one waiter at a time: a parent runs its
+	// tool calls serially, a subagent has exactly one parent, and a re-send
+	// to a busy subagent cancels the prior run before registering. The count
+	// (rather than a bool) just makes register/finish robustly balanced; the
+	// "exactly one delivery" guarantee in finishSubagentWait assumes this
+	// single-waiter precondition.
+	subagentWaitOwners int
+
+	// subagentFinishSuppressed records that a working→idle transition fired
+	// while a synchronous waiter held a slot (so onDone was suppressed). If
+	// that waiter ultimately returns WITHOUT delivering the final response
+	// (the timeout path), it consults this flag to know an async completion
+	// notification is still owed. Guarded by cm.mu.
+	subagentFinishSuppressed bool
 }
 
 // NewConversationManager constructs a manager with dependencies but defers hydration until needed.
@@ -211,6 +237,18 @@ func (cm *ConversationManager) SetAgentWorking(working bool) {
 	onDone := cm.onDone
 	convID := cm.conversationID
 	modelID := cm.modelID
+	// Decide whether to fire the async done-notification under the SAME lock
+	// as the working-state flip. If a synchronous waiter is in flight against
+	// this subagent, it is expected to return the response itself, so the
+	// async path stays silent. Reading the counter here (atomically with
+	// "agent finished") closes the race the older timeout-map/DB suppression
+	// tried to paper over. We also remember that we suppressed a real finish,
+	// so a waiter that gives up (times out) without delivering can recover the
+	// notification rather than drop it.
+	suppressDone := cm.subagentWaitOwners > 0
+	if !working && suppressDone {
+		cm.subagentFinishSuppressed = true
+	}
 	cm.mu.Unlock()
 
 	cm.logger.Debug("agent working state changed", "working", working)
@@ -224,9 +262,47 @@ func (cm *ConversationManager) SetAgentWorking(working bool) {
 			Model:          modelID,
 		})
 	}
-	if !working && onDone != nil {
+	if !working && onDone != nil && !suppressDone {
 		onDone()
 	}
+}
+
+// registerSubagentWaiter marks that a synchronous (wait=true) subagent tool
+// call is in flight against this (subagent) conversation. While at least one
+// waiter is registered, SetAgentWorking suppresses the async onDone
+// notification, since the waiter is expected to deliver the subagent's
+// response via the tool's return value. Each call must be paired with exactly
+// one finishSubagentWait.
+func (cm *ConversationManager) registerSubagentWaiter() {
+	cm.mu.Lock()
+	cm.subagentWaitOwners++
+	cm.mu.Unlock()
+}
+
+// finishSubagentWait ends a synchronous wait registered by
+// registerSubagentWaiter. delivered reports whether the caller is returning
+// the subagent's final response to the parent (true) or is giving up without
+// it — e.g. a timeout that returns only a progress summary (false).
+//
+// It returns notifyOwed=true when the subagent already finished (a
+// working→idle transition was suppressed because this waiter held a slot) but
+// the caller is NOT delivering that result. In that case the caller must
+// trigger the async completion notification itself, since no further onDone
+// will fire. The whole decision is made under cm.mu so it is atomic against a
+// concurrent SetAgentWorking transition: given the single-waiter precondition
+// documented on subagentWaitOwners, exactly one of the two paths (onDone or
+// notifyOwed) ends up delivering, never both and never neither.
+func (cm *ConversationManager) finishSubagentWait(delivered bool) (notifyOwed bool) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.subagentWaitOwners > 0 {
+		cm.subagentWaitOwners--
+	}
+	suppressed := cm.subagentFinishSuppressed
+	cm.subagentFinishSuppressed = false
+	// If we delivered the response, the suppressed finish is accounted for.
+	// Otherwise, a suppressed finish still needs an async notification.
+	return !delivered && suppressed
 }
 
 // IsAgentWorking returns the current agent working state.

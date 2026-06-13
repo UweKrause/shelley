@@ -149,14 +149,10 @@ func (f *subagentDoneFixture) fireOnDone() {
 
 func TestSubagentDone(t *testing.T) {
 	t.Run("HappyPath_WaitFalse_NotifiesIdleParent", testSubagentDone_HappyPath)
-	t.Run("SuppressedWhileParentBusy", testSubagentDone_SuppressedParentBusy)
-	t.Run("SuppressedAfterWaitResultRecorded", testSubagentDone_SuppressedAfterWaitResultRecorded)
-	t.Run("TimeoutResultStillNotifiesOnCompletion", testSubagentDone_TimeoutResultStillNotifiesOnCompletion)
-	t.Run("TimeoutMarkedBeforeToolResultStillNotifies", testSubagentDone_TimeoutMarkedBeforeToolResultStillNotifies)
-	t.Run("LiteralTimeoutTextDoesNotCountAsTimeout", testSubagentDone_LiteralTimeoutTextDoesNotCountAsTimeout)
-	t.Run("RenamedSlugTimeoutStillNotifies", testSubagentDone_RenamedSlugTimeoutStillNotifies)
-	t.Run("LaterPromptDoesNotClearTimeoutMarker", testSubagentDone_LaterPromptDoesNotClearTimeoutMarker)
-	t.Run("SynchronousCompletionClearsStaleTimeoutMarker", testSubagentDone_SynchronousCompletionClearsStaleTimeoutMarker)
+	t.Run("SuppressedWhileWaiterActive", testSubagentDone_SuppressedWhileWaiterActive)
+	t.Run("SuppressedDespiteSlugRename", testSubagentDone_SuppressedDespiteSlugRename)
+	t.Run("WaiterTimeoutAfterFinishNotifies", testSubagentDone_WaiterTimeoutAfterFinishNotifies)
+	t.Run("WaiterTimeoutBeforeFinishNotifiesOnce", testSubagentDone_WaiterTimeoutBeforeFinishNotifiesOnce)
 	t.Run("QueuedDuringDistillation", testSubagentDone_QueuedDuringDistillation)
 	t.Run("WakesIdleParentLoop", testSubagentDone_WakesIdleLoop)
 	t.Run("ToolResultCorrectness", testSubagentDone_ToolResultCorrectness)
@@ -259,288 +255,182 @@ func toolResultText(c llm.Content) string {
 	return sb.String()
 }
 
-// 2. Parent busy: if parent.agentWorking is true at the moment the subagent
-// finishes, no notification messages are added to the parent.
-// SuppressedWhileParentBusy: the suppression rule is no longer "any
-// parentBusy". It's specifically "the parent has a pending subagent tool
-// call targeting THIS subagent" — i.e. the wait=true in-flight tool-call
-// case where the parent's tool call will deliver the response on its own
-// and a synthetic pair would duplicate. We simulate that here by
-// recording an unanswered subagent tool_use targeting our subagent slug.
-func testSubagentDone_SuppressedParentBusy(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Some response.")
+// Suppression is now decided by an in-memory synchronous-waiter slot on the
+// subagent's ConversationManager (subagentWaitOwners), consulted atomically
+// inside SetAgentWorking. These tests drive that mechanism directly. Note
+// that the slot is keyed by the manager (immutable conversation ID), so
+// suppression is correct even when the requested slug differs from the
+// subagent conversation's actual (uniqueness-renamed) slug — the bug that
+// the old history-parsing suppression could not handle.
 
-	// Record a pending subagent tool_use against the parent.
-	pendingInput, _ := json.Marshal(map[string]any{"slug": f.subSlug, "prompt": "go", "wait": true})
-	pendingMsg := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        "toolu_pending_user_initiated",
-			ToolName:  "subagent",
-			ToolInput: pendingInput,
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, pendingMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record pending tool_use: %v", err)
-	}
+// While a synchronous waiter holds a slot, a subagent finishing must NOT fire
+// the async onDone notification: the waiter delivers the response via the
+// tool's return value, so a synthetic pair would duplicate it.
+func testSubagentDone_SuppressedWhileWaiterActive(t *testing.T) {
+	f := newSubagentDoneFixture(t, "Synchronous response.")
+
+	f.subagentMgr.registerSubagentWaiter()
 
 	before := len(f.parentMessages())
-	f.server.notifyParentSubagentDone(f.subagentID)
+	f.fireOnDone() // subagent finishes while the waiter holds its slot
+
+	// Give any (erroneous) async notification a chance to land.
+	time.Sleep(150 * time.Millisecond)
 	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("expected no new parent messages while a subagent tool call is pending, got %d new", got-before)
+		t.Fatalf("expected no new parent messages while a synchronous waiter is active, got %d new", got-before)
 	}
 	if hasSyntheticDonePair(t, f.parentMessages()) {
-		t.Fatalf("expected no synthetic pair when parent has a pending subagent tool call")
-	}
-}
-
-func testSubagentDone_SuppressedAfterWaitResultRecorded(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Synchronous wait result.")
-
-	toolUseID := "toolu_wait_done"
-	pendingInput, _ := json.Marshal(map[string]any{"slug": f.subSlug, "prompt": "go", "wait": true})
-	assistantMsg := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        toolUseID,
-			ToolName:  "subagent",
-			ToolInput: pendingInput,
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, assistantMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_use: %v", err)
-	}
-	toolResultMsg := llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolResult,
-			ToolUseID: toolUseID,
-			ToolResult: []llm.Content{{
-				Type: llm.ContentTypeText,
-				Text: "Subagent 'sub-test' response:\nSynchronous wait result.",
-			}},
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, toolResultMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_result: %v", err)
+		t.Fatalf("expected no synthetic pair while a synchronous waiter is active")
 	}
 
-	before := len(f.parentMessages())
-	f.server.notifyParentSubagentDone(f.subagentID)
-	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("expected no new parent messages after wait=true already recorded a tool_result, got %d new", got-before)
+	// The waiter delivers the result itself, so finishing reports no owed
+	// async notification.
+	if owed := f.subagentMgr.finishSubagentWait(true); owed {
+		t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
 	}
+	time.Sleep(50 * time.Millisecond)
 	if hasSyntheticDonePair(t, f.parentMessages()) {
-		t.Fatalf("expected no synthetic subagent-done pair after wait=true already recorded a tool_result")
+		t.Fatalf("expected no synthetic pair after the waiter delivered the result")
 	}
 }
 
-func testSubagentDone_TimeoutResultStillNotifiesOnCompletion(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Finished after timeout.")
+// Regression for the original duplicate-completion bug: the parent records a
+// subagent tool_use under the REQUESTED slug ("rev1"), but the subagent
+// conversation was renamed for uniqueness ("rev1-4"). The old suppression
+// matched the parent's recorded slug against the renamed conversation slug,
+// never matched, and so fired a duplicate async completion on top of the
+// wait=true tool return. The waiter-slot mechanism is keyed by the manager
+// (conversation ID), so the mismatch is irrelevant and suppression holds.
+func testSubagentDone_SuppressedDespiteSlugRename(t *testing.T) {
+	f := newSubagentDoneFixture(t, "Synchronous response.")
 
-	toolUseID := "toolu_wait_timeout"
-	input, _ := json.Marshal(map[string]any{"slug": f.subSlug, "prompt": "go", "wait": true})
-	assistantMsg := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        toolUseID,
-			ToolName:  "subagent",
-			ToolInput: input,
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, assistantMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_use: %v", err)
-	}
-	toolResultMsg := llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolResult,
-			ToolUseID: toolUseID,
-			ToolResult: []llm.Content{{
-				Type: llm.ContentTypeText,
-				Text: "Subagent 'sub-test' response:\n[Subagent is still working (timeout reached). Progress summary:]\nStill working.",
-			}},
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, toolResultMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_result: %v", err)
-	}
-
-	f.server.notifyParentSubagentDone(f.subagentID)
-
-	waitFor(t, 5*time.Second, func() bool {
-		return hasSyntheticDonePair(t, f.parentMessages())
-	})
-}
-
-func testSubagentDone_TimeoutMarkedBeforeToolResultStillNotifies(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Finished after timeout before parent recorded the timeout result.")
-
-	input, _ := json.Marshal(map[string]any{"slug": f.subSlug, "prompt": "go", "wait": true})
-	assistantMsg := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        "toolu_wait_timeout_pending_result",
-			ToolName:  "subagent",
-			ToolInput: input,
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, assistantMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_use: %v", err)
-	}
-	f.server.markSubagentWaitTimedOut(f.subagentID)
-
-	f.server.notifyParentSubagentDone(f.subagentID)
-
-	waitFor(t, 5*time.Second, func() bool {
-		return hasSyntheticDonePair(t, f.parentMessages())
-	})
-}
-
-func testSubagentDone_LiteralTimeoutTextDoesNotCountAsTimeout(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Already delivered, but mentioned timeout reached literally.")
-
-	toolUseID := "toolu_wait_literal_timeout"
-	input, _ := json.Marshal(map[string]any{"slug": f.subSlug, "prompt": "go", "wait": true})
-	assistantMsg := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        toolUseID,
-			ToolName:  "subagent",
-			ToolInput: input,
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, assistantMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_use: %v", err)
-	}
-	toolResultMsg := llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolResult,
-			ToolUseID: toolUseID,
-			ToolResult: []llm.Content{{
-				Type: llm.ContentTypeText,
-				Text: "Subagent 'sub-test' response:\nThe phrase timeout reached appears in this real answer.",
-			}},
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, toolResultMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_result: %v", err)
-	}
-
-	before := len(f.parentMessages())
-	f.server.notifyParentSubagentDone(f.subagentID)
-	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("expected no new parent messages for a real wait=true result mentioning timeout text, got %d new", got-before)
-	}
-}
-
-func testSubagentDone_RenamedSlugTimeoutStillNotifies(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Finished after renamed-slug timeout.")
-
-	toolUseID := "toolu_wait_renamed_timeout"
-	input, _ := json.Marshal(map[string]any{"slug": f.subSlug, "prompt": "go", "wait": true})
-	assistantMsg := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        toolUseID,
-			ToolName:  "subagent",
-			ToolInput: input,
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, assistantMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_use: %v", err)
-	}
-	toolResultMsg := llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolResult,
-			ToolUseID: toolUseID,
-			ToolResult: []llm.Content{{
-				Type: llm.ContentTypeText,
-				Text: "Subagent 'sub-test' response: (Note: slug was changed to 'sub-test' for uniqueness. Use 'sub-test' for future messages to this subagent.)\n[Subagent is still working (timeout reached). Progress summary:]\nStill working.",
-			}},
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, toolResultMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_result: %v", err)
-	}
-
-	f.server.notifyParentSubagentDone(f.subagentID)
-
-	waitFor(t, 5*time.Second, func() bool {
-		return hasSyntheticDonePair(t, f.parentMessages())
-	})
-}
-
-func testSubagentDone_LaterPromptDoesNotClearTimeoutMarker(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Earlier timed-out run finished.")
-
-	f.server.markSubagentWaitTimedOut(f.subagentID)
+	// Record a parent tool_use whose requested slug differs from the
+	// subagent's actual (renamed) slug. This is exactly what the buggy
+	// history-parsing suppression keyed off.
+	requestedSlug := f.subSlug + "-DIFFERENT-REQUESTED"
+	pendingInput, _ := json.Marshal(map[string]any{"slug": requestedSlug, "prompt": "go", "wait": true})
 	if err := f.server.recordMessage(context.Background(), f.parentID, llm.Message{
 		Role: llm.MessageRoleAssistant,
 		Content: []llm.Content{{
 			Type:      llm.ContentTypeToolUse,
-			ID:        "toolu_later_wait_same_slug",
+			ID:        "toolu_renamed_pending",
 			ToolName:  "subagent",
-			ToolInput: []byte(`{"slug":"sub-test","prompt":"new work","wait":true}`),
+			ToolInput: pendingInput,
 		}},
 	}, llm.Usage{}); err != nil {
-		t.Fatalf("record later tool_use: %v", err)
+		t.Fatalf("record pending tool_use: %v", err)
 	}
 
-	f.server.notifyParentSubagentDone(f.subagentID)
+	// A real wait=true call would hold a slot; simulate that.
+	f.subagentMgr.registerSubagentWaiter()
 
+	before := len(f.parentMessages())
+	f.fireOnDone()
+	time.Sleep(150 * time.Millisecond)
+	if got := len(f.parentMessages()); got != before {
+		t.Fatalf("expected no new parent messages despite slug rename, got %d new", got-before)
+	}
+	if hasSyntheticDonePair(t, f.parentMessages()) {
+		t.Fatalf("expected no synthetic pair despite slug rename")
+	}
+	if owed := f.subagentMgr.finishSubagentWait(true); owed {
+		t.Fatalf("finishSubagentWait(delivered=true) reported notifyOwed=true; want false")
+	}
+}
+
+// If the subagent finishes while a waiter holds its slot (onDone suppressed),
+// but the waiter then gives up WITHOUT delivering (the timeout path returns
+// only a progress summary), finishSubagentWait must report notifyOwed=true so
+// the caller fires the async completion. This is the finish/timeout race the
+// old timeout-map tried to cover.
+func testSubagentDone_WaiterTimeoutAfterFinishNotifies(t *testing.T) {
+	f := newSubagentDoneFixture(t, "Finished right as the wait timed out.")
+
+	f.subagentMgr.registerSubagentWaiter()
+	f.fireOnDone() // subagent finishes; onDone suppressed by the active slot
+
+	owed := f.subagentMgr.finishSubagentWait(false) // timeout: not delivered
+	if !owed {
+		t.Fatalf("finishSubagentWait(delivered=false) after a suppressed finish reported notifyOwed=false; want true")
+	}
+
+	// The caller (endWait) fires the notification when owed.
+	f.server.notifyParentSubagentDone(f.subagentID)
 	waitFor(t, 5*time.Second, func() bool {
 		return hasSyntheticDonePair(t, f.parentMessages())
 	})
 }
 
-func testSubagentDone_SynchronousCompletionClearsStaleTimeoutMarker(t *testing.T) {
-	f := newSubagentDoneFixture(t, "Synchronous later run already returned.")
+// If the waiter times out BEFORE the subagent finishes, nothing is owed yet —
+// the subagent is still working. When it later finishes (no slot held), the
+// normal onDone path fires exactly one notification.
+func testSubagentDone_WaiterTimeoutBeforeFinishNotifiesOnce(t *testing.T) {
+	f := newSubagentDoneFixture(t, "Finished after the wait already timed out.")
 
-	f.server.markSubagentWaitTimedOut(f.subagentID)
-	f.server.clearSubagentWaitTimedOut(f.subagentID)
-	toolUseID := "toolu_sync_after_stale_marker"
-	input, _ := json.Marshal(map[string]any{"slug": f.subSlug, "prompt": "new work", "wait": true})
-	assistantMsg := llm.Message{
-		Role: llm.MessageRoleAssistant,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolUse,
-			ID:        toolUseID,
-			ToolName:  "subagent",
-			ToolInput: input,
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, assistantMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_use: %v", err)
-	}
-	toolResultMsg := llm.Message{
-		Role: llm.MessageRoleUser,
-		Content: []llm.Content{{
-			Type:      llm.ContentTypeToolResult,
-			ToolUseID: toolUseID,
-			ToolResult: []llm.Content{{
-				Type: llm.ContentTypeText,
-				Text: "Subagent 'sub-test' response:\nSynchronous later run already returned.",
-			}},
-		}},
-	}
-	if err := f.server.recordMessage(context.Background(), f.parentID, toolResultMsg, llm.Usage{}); err != nil {
-		t.Fatalf("record tool_result: %v", err)
+	f.subagentMgr.registerSubagentWaiter()
+	// Subagent is still working; mark it so SetAgentWorking has a real
+	// working->idle transition to make later.
+	f.subagentMgr.SetAgentWorking(true)
+
+	if owed := f.subagentMgr.finishSubagentWait(false); owed {
+		t.Fatalf("finishSubagentWait(delivered=false) while still working reported notifyOwed=true; want false")
 	}
 
-	before := len(f.parentMessages())
-	f.server.notifyParentSubagentDone(f.subagentID)
-	if got := len(f.parentMessages()); got != before {
-		t.Fatalf("expected no new parent messages after stale marker was cleared by synchronous completion, got %d new", got-before)
+	// Now the subagent actually finishes: no slot held, onDone fires.
+	f.subagentMgr.SetAgentWorking(false)
+	waitFor(t, 5*time.Second, func() bool {
+		return hasSyntheticDonePair(t, f.parentMessages())
+	})
+
+	// Exactly one synthetic completion fires (the parent loop may append its
+	// own reply afterward, which is why we count synthetic pairs rather than
+	// raw message deltas).
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if n := countSyntheticDonePairs(t, f.parentMessages()); n > 1 {
+			t.Fatalf("expected exactly one synthetic done pair after late finish, got %d", n)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+	if n := countSyntheticDonePairs(t, f.parentMessages()); n != 1 {
+		t.Fatalf("expected exactly one synthetic done pair after late finish, got %d", n)
+	}
+}
+
+// countSyntheticDonePairs returns how many synthetic subagent-done tool_use/
+// tool_result pairs (sa_done_ prefixed) appear in msgs. Used to assert that
+// exactly one async completion fires, ignoring any normal parent replies the
+// loop appends afterward.
+func countSyntheticDonePairs(t *testing.T, msgs []generated.Message) int {
+	t.Helper()
+	n := 0
+	for i := 0; i+1 < len(msgs); i++ {
+		if msgs[i].LlmData == nil || msgs[i+1].LlmData == nil {
+			continue
+		}
+		var use, result llm.Message
+		if err := json.Unmarshal([]byte(*msgs[i].LlmData), &use); err != nil {
+			continue
+		}
+		if err := json.Unmarshal([]byte(*msgs[i+1].LlmData), &result); err != nil {
+			continue
+		}
+		var useID string
+		for _, c := range use.Content {
+			if c.Type == llm.ContentTypeToolUse && c.ToolName == "subagent" && strings.HasPrefix(c.ID, "sa_done_") {
+				useID = c.ID
+			}
+		}
+		if useID == "" {
+			continue
+		}
+		for _, c := range result.Content {
+			if c.Type == llm.ContentTypeToolResult && c.ToolUseID == useID {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func hasSyntheticDonePair(t *testing.T, msgs []generated.Message) bool {

@@ -103,10 +103,7 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 	}
 
 	// If the subagent is currently working, stop it first before sending new message.
-	// A stopped timed-out run will not later complete, so discard any pending
-	// async-completion marker for it.
 	if manager.IsAgentWorking() {
-		s.clearSubagentWaitTimedOut(conversationID)
 		s.logger.Info("Subagent is working, stopping before sending new message", "conversationID", conversationID)
 		if err := manager.CancelConversation(ctx); err != nil {
 			s.logger.Error("Failed to cancel subagent conversation", "error", err)
@@ -124,28 +121,49 @@ func (r *SubagentRunner) RunSubagent(ctx context.Context, conversationID, prompt
 		Content: []llm.Content{{Type: llm.ContentTypeText, Text: prompt}},
 	}
 
+	// For wait=true, register a synchronous-waiter slot on the subagent
+	// manager BEFORE accepting the message. The slot is what suppresses the
+	// subagent's async onDone notification: while it is held, this tool call
+	// is responsible for delivering the response. Registering before
+	// AcceptUserMessage (which may complete the turn synchronously) ensures
+	// the working→idle transition is covered even for instant replies.
+	if wait {
+		manager.registerSubagentWaiter()
+	}
+
 	// Accept the user message (this starts processing)
 	_, err = manager.AcceptUserMessage(ctx, llmService, modelID, userMessage)
 	if err != nil {
+		if wait {
+			// Release the slot like any other non-delivery exit; endWait also
+			// fires the async completion if a finish was suppressed while we
+			// held it (symmetry with the timeout/cancel paths).
+			r.endWait(manager, conversationID, false)
+		}
 		return "", fmt.Errorf("failed to accept user message: %w", err)
-	}
-	if wait && !manager.IsAgentWorking() {
-		// The response completed synchronously inside AcceptUserMessage; any
-		// stale timeout marker belongs to an earlier run and must not cause a
-		// duplicate async completion for this one. If the new run is still
-		// working, preserve the marker so the earlier timed-out run can still
-		// report completion.
-		s.clearSubagentWaitTimedOut(conversationID)
 	}
 	if !wait {
 		return fmt.Sprintf("Subagent started processing. Conversation ID: %s", conversationID), nil
 	}
 
-	// Wait for the agent to finish (or timeout)
-	return r.waitForResponse(ctx, conversationID, modelID, llmService, timeout)
+	// Wait for the agent to finish (or timeout). waitForResponse owns the
+	// synchronous-waiter slot registered above and releases it on every exit.
+	return r.waitForResponse(ctx, manager, conversationID, modelID, llmService, timeout)
 }
 
-func (r *SubagentRunner) waitForResponse(ctx context.Context, conversationID, modelID string, llmService llm.Service, timeout time.Duration) (string, error) {
+// endWait releases this call's synchronous-waiter slot and, if a working→idle
+// transition was suppressed while we held it but we are NOT delivering the
+// result (delivered=false), fires the async completion notification that
+// onDone would otherwise have fired. This covers the timeout and
+// context-cancellation paths, where the tool's return value is not the
+// subagent's final answer.
+func (r *SubagentRunner) endWait(manager *ConversationManager, conversationID string, delivered bool) {
+	if manager.finishSubagentWait(delivered) {
+		go r.server.notifyParentSubagentDone(conversationID)
+	}
+}
+
+func (r *SubagentRunner) waitForResponse(ctx context.Context, manager *ConversationManager, conversationID, modelID string, llmService llm.Service, timeout time.Duration) (string, error) {
 	s := r.server
 
 	deadline := time.Now().Add(timeout)
@@ -154,35 +172,41 @@ func (r *SubagentRunner) waitForResponse(ctx context.Context, conversationID, mo
 	for {
 		select {
 		case <-ctx.Done():
+			r.endWait(manager, conversationID, false)
 			return "", ctx.Err()
 		default:
 		}
 
 		if time.Now().After(deadline) {
-			// Timeout reached - generate a progress summary. Remember that
-			// this subagent still needs an async completion notification later,
-			// even if it finishes before the parent records the timeout tool_result.
-			s.markSubagentWaitTimedOut(conversationID)
+			// Timeout reached: we return only a progress summary, not the final
+			// answer. Release the slot as a non-delivery; if the subagent has
+			// already finished (its onDone was suppressed while we held the
+			// slot), endWait fires the async completion so the parent still
+			// learns the outcome. If it is still working, a later onDone fires
+			// normally now that the slot is freed.
+			r.endWait(manager, conversationID, false)
 			return r.generateProgressSummary(ctx, conversationID, modelID, llmService)
 		}
 
 		// Check if agent is still working
 		working, err := r.isAgentWorking(ctx, conversationID)
 		if err != nil {
+			r.endWait(manager, conversationID, false)
 			return "", fmt.Errorf("failed to check agent status: %w", err)
 		}
 
 		if !working {
-			// Agent is done and this wait=true call will return the final answer
-			// synchronously, so any old timeout marker for this conversation must
-			// not trigger a duplicate async completion later.
-			s.clearSubagentWaitTimedOut(conversationID)
+			// Agent is done and this wait=true call returns the final answer
+			// synchronously, so we are the delivery path: release the slot as
+			// delivered=true and suppress any async duplicate.
+			r.endWait(manager, conversationID, true)
 			return r.getLastAssistantResponse(ctx, conversationID)
 		}
 
 		// Wait before polling again
 		select {
 		case <-ctx.Done():
+			r.endWait(manager, conversationID, false)
 			return "", ctx.Err()
 		case <-time.After(pollInterval):
 		}
@@ -408,10 +432,18 @@ func (r *SubagentRunner) notifySubagentConversation(ctx context.Context, convers
 // same drainPendingMessages path that user messages already use. We just
 // drop a batch onto the queue and trust that machinery.
 //
-// The case we filter out here is wait=true: if the parent has a pending or
-// already completed synchronous subagent tool call targeting this exact
-// subagent, that tool call conveys the response and our synthetic pair would
-// duplicate it.
+// Deciding WHETHER a notification is owed is no longer this function's job.
+// The synchronous-waiter slot on the subagent manager (see
+// ConversationManager.subagentWaitOwners and SetAgentWorking) is the single
+// authority: this function is only ever invoked from the two paths that have
+// already determined a notification is genuinely needed —
+//  1. onDone, when the subagent finished with no synchronous waiter holding a
+//     slot, and
+//  2. SubagentRunner.endWait, when a synchronous waiter gave up (timeout /
+//     cancellation) without delivering the result it suppressed.
+//
+// Both are keyed by the immutable conversation ID, so the old, slug-fragile
+// history parsing that duplicated wait=true responses is gone.
 func (s *Server) notifyParentSubagentDone(subagentConversationID string) {
 	ctx := context.Background()
 
@@ -435,16 +467,6 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID string) {
 	parentManager, ok := s.activeConversations[parentID]
 	s.mu.Unlock()
 	if !ok {
-		return
-	}
-
-	// If a wait=true call timed out, the parent has only seen a progress
-	// summary, so the eventual completion still needs to be delivered. This
-	// in-memory bit closes the race where the subagent finishes before the
-	// parent's timeout tool_result has been persisted.
-	if s.subagentWaitTimedOut(subagentConversationID) {
-		s.clearSubagentWaitTimedOut(subagentConversationID)
-	} else if s.parentHasSynchronousSubagentResult(ctx, parentID, subagentConversationID) {
 		return
 	}
 
@@ -524,134 +546,6 @@ func (s *Server) notifyParentSubagentDone(subagentConversationID string) {
 	// is the single point of coordination.
 	parentManager.EnqueueSubagentDone(s, modelID, assistantMsg, toolResultMsg)
 	s.logger.Info("Queued subagent-done notification for parent", "subagent", slug, "parent", parentID)
-}
-
-func (s *Server) markSubagentWaitTimedOut(subagentConversationID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.subagentWaitTimeouts[subagentConversationID] = true
-}
-
-func (s *Server) clearSubagentWaitTimedOut(subagentConversationID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.subagentWaitTimeouts, subagentConversationID)
-}
-
-func (s *Server) subagentWaitTimedOut(subagentConversationID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.subagentWaitTimeouts[subagentConversationID]
-}
-
-// parentHasSynchronousSubagentResult reports whether the parent has a
-// wait=true subagent tool call targeting the just-finished subagent that
-// either has not yet received its tool_result or has already received the
-// subagent's final response. In both cases notifyParentSubagentDone must not
-// synthesize another tool_result: the in-flight or recorded tool call is
-// already the delivery path for the result.
-//
-// wait=true calls that timed out are different: their tool_result is only a
-// progress summary, and the eventual completion should still be delivered
-// asynchronously.
-//
-// We match on slug alone (not conversation ID) because the subagent tool
-// enforces slug uniqueness within a parent conversation (see
-// claudetool/subagent.go: "failed to create unique subagent slug"), so a
-// slug uniquely identifies a subagent within its parent.
-func (s *Server) parentHasSynchronousSubagentResult(ctx context.Context, parentID, subagentConversationID string) bool {
-	var conv generated.Conversation
-	if err := s.db.Queries(ctx, func(q *generated.Queries) error {
-		var err error
-		conv, err = q.GetConversation(ctx, subagentConversationID)
-		return err
-	}); err != nil || conv.Slug == nil {
-		return false
-	}
-	targetSlug := *conv.Slug
-
-	var msgs []generated.Message
-	if err := s.db.Queries(ctx, func(q *generated.Queries) error {
-		var err error
-		msgs, err = q.ListMessagesForContext(ctx, parentID)
-		return err
-	}); err != nil {
-		return false
-	}
-
-	// Walk backwards to find the most recent subagent tool_use for this slug.
-	// Its wait value tells us whether completion should be synchronous
-	// (wait omitted/true) or asynchronous (wait=false).
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m := msgs[i]
-		if m.LlmData == nil {
-			continue
-		}
-		var lm llm.Message
-		if err := json.Unmarshal([]byte(*m.LlmData), &lm); err != nil {
-			continue
-		}
-		for _, c := range lm.Content {
-			if c.Type != llm.ContentTypeToolUse || c.ToolName != "subagent" {
-				continue
-			}
-			var input struct {
-				Slug string `json:"slug"`
-				Wait *bool  `json:"wait"`
-			}
-			if err := json.Unmarshal(c.ToolInput, &input); err != nil || input.Slug != targetSlug {
-				continue
-			}
-			if input.Wait != nil && !*input.Wait {
-				return false
-			}
-			return !subagentToolUseTimedOut(msgs[i+1:], c.ID, targetSlug)
-		}
-	}
-	return false
-}
-
-func subagentToolUseTimedOut(msgs []generated.Message, toolUseID, slug string) bool {
-	for _, m := range msgs {
-		if m.LlmData == nil {
-			continue
-		}
-		var lm llm.Message
-		if err := json.Unmarshal([]byte(*m.LlmData), &lm); err != nil {
-			continue
-		}
-		for _, c := range lm.Content {
-			if c.Type != llm.ContentTypeToolResult || c.ToolUseID != toolUseID {
-				continue
-			}
-			return isSubagentTimeoutResult(toolResultPlainText(c), slug)
-		}
-	}
-	// Still pending: the synchronous tool call will deliver the response.
-	return false
-}
-
-func isSubagentTimeoutResult(text, slug string) bool {
-	prefix := fmt.Sprintf("Subagent '%s' response:", slug)
-	if !strings.HasPrefix(text, prefix) {
-		return false
-	}
-	_, result, ok := strings.Cut(text[len(prefix):], "\n")
-	if !ok {
-		return false
-	}
-	return strings.HasPrefix(result, "[Subagent is still working (timeout reached).") ||
-		strings.Contains(result, ")\n[Subagent is still working (timeout reached).")
-}
-
-func toolResultPlainText(c llm.Content) string {
-	var sb strings.Builder
-	for _, r := range c.ToolResult {
-		if r.Type == llm.ContentTypeText {
-			sb.WriteString(r.Text)
-		}
-	}
-	return sb.String()
 }
 
 // lastAgentText returns the concatenated text content of the most recent
