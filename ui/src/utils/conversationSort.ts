@@ -86,3 +86,17 @@ export function applyStableKeyOrder(
   }
   return [...newKeys, ...kept];
 }
+
+// neighborAfterRemoval returns the conversation that should be selected after
+// the conversation with `removedId` is removed from a visually-ordered list.
+// The next selection is the conversation immediately below the removed one;
+// if it was the last item, the one immediately above; null if there's no
+// other conversation (or the id isn't present).
+export function neighborAfterRemoval<T extends { conversation_id: string }>(
+  order: readonly T[],
+  removedId: string,
+): T | null {
+  const idx = order.findIndex((c) => c.conversation_id === removedId);
+  if (idx < 0) return null;
+  return order[idx + 1] ?? order[idx - 1] ?? null;
+}

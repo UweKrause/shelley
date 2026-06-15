@@ -7,6 +7,7 @@ import {
   maxBucket,
   applyStableOrder,
   applyStableKeyOrder,
+  neighborAfterRemoval,
 } from "../utils/conversationSort";
 import { tildifyPath } from "../utils/tildify";
 import { handleModifiedNavClick } from "../utils/openInNewTab";
@@ -73,7 +74,7 @@ interface ConversationDrawerProps {
   viewedConversation?: Conversation | null; // The currently viewed conversation (may be a subagent)
   onSelectConversation: (conversation: Conversation) => void;
   onNewConversation: () => void;
-  onConversationArchived?: (id: string) => void;
+  onConversationArchived?: (id: string, nextConversation?: Conversation | null) => void;
   onConversationUnarchived?: (conversation: Conversation) => void;
   onConversationRenamed?: (conversation: Conversation) => void;
   showActiveTrigger?: number; // Increment to switch back to active conversations view
@@ -162,6 +163,10 @@ function ConversationDrawer({
   const subagentOrderRef = React.useRef<Record<string, string[]>>({});
   const groupOrderRef = React.useRef<Record<string, string[]>>({});
   const groupKeysOrderRef = React.useRef<string[]>([]);
+  // Flat top-to-bottom order of the currently visible active conversations
+  // (accounting for grouping), used to pick the next selection when one is
+  // archived. Kept in a ref so the archive handler reads the latest order.
+  const flatVisualOrderRef = React.useRef<Conversation[]>([]);
   // Tracks the resortKey the order refs were last computed against. When
   // it changes, the next useMemo for each list passes an empty prev-order
   // so the user-visible sort is refreshed in the same render cycle.
@@ -360,9 +365,14 @@ function ConversationDrawer({
 
   const handleArchive = async (e: React.MouseEvent, conversationId: string) => {
     e.stopPropagation();
+    // Determine which conversation should be selected after this one is
+    // archived: the one immediately below it in the visible list, or, if it's
+    // the last item, the one immediately above it. Uses the flat visual order
+    // (which accounts for grouping) so selection matches what the user sees.
+    const nextConversation = neighborAfterRemoval(flatVisualOrderRef.current, conversationId);
     try {
       await api.archiveConversation(conversationId);
-      onConversationArchived?.(conversationId);
+      onConversationArchived?.(conversationId, nextConversation);
       // Refresh archived list if viewing
       if (showArchived) {
         loadArchivedConversations();
@@ -699,6 +709,14 @@ function ConversationDrawer({
     groupOrderRef.current = nextGroupOrder;
     return sorted;
   }, [topLevelConversations, groupBy, showArchived, t, resortKey]);
+
+  // Maintain the flat visual order of the currently displayed conversations
+  // for archive-based next-selection. When grouped, flatten groups in their
+  // displayed order; otherwise use the displayed list (which honors search and
+  // archived views), so the chosen neighbor matches what the user sees.
+  flatVisualOrderRef.current = groupedConversations
+    ? groupedConversations.flatMap(([, group]) => group.conversations)
+    : displayedConversations;
 
   const renderDeleteButton = (conversationId: string) => {
     if (pendingDeleteId === conversationId) {

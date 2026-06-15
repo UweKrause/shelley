@@ -612,11 +612,22 @@ function App() {
     [currentConversationId],
   );
 
-  const handleConversationArchived = (conversationId: string) => {
+  const handleConversationArchived = (
+    conversationId: string,
+    nextConversation?: Conversation | null,
+  ) => {
     void messageStore.delete(conversationId);
     // If the archived conversation was current, switch immediately; the patch
-    // stream will remove it from the list.
+    // stream will remove it from the list. The drawer tells us which
+    // conversation to select next (the one immediately below the archived one,
+    // else the one immediately above); fall back to the first remaining
+    // top-level conversation if it didn't.
     if (currentConversationId === conversationId) {
+      if (nextConversation && nextConversation.conversation_id !== conversationId) {
+        setCurrentConversationId(nextConversation.conversation_id);
+        setViewedConversation(nextConversation);
+        return;
+      }
       const remaining = conversationsRef.current.filter(
         (conv) => conv.conversation_id !== conversationId && !conv.parent_conversation_id,
       );

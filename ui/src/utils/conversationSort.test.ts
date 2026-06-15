@@ -2,6 +2,7 @@ import {
   BUCKET_MS,
   applyStableKeyOrder,
   applyStableOrder,
+  neighborAfterRemoval,
   sortConversationsByBucket,
   updatedBucket,
 } from "./conversationSort";
@@ -114,6 +115,23 @@ run("applyStableKeyOrder behaves the same on string keys", () => {
   // new repo arrives.
   order = applyStableKeyOrder(["repo-d", "repo-c", "repo-b", "repo-a"], order);
   assert(order.join(",") === "repo-d,repo-c,repo-b,repo-a", `new: ${order}`);
+});
+
+run("neighborAfterRemoval picks the item below, else above", () => {
+  const a = conv("A", "2026-05-10T12:00:00Z");
+  const b = conv("B", "2026-05-10T12:01:00Z");
+  const c = conv("C", "2026-05-10T12:02:00Z");
+  const order = [a, b, c];
+  // Middle item -> the one immediately below.
+  assert(neighborAfterRemoval(order, "B")?.conversation_id === "C", "middle picks below");
+  // First item -> the one immediately below.
+  assert(neighborAfterRemoval(order, "A")?.conversation_id === "B", "first picks below");
+  // Last item -> the one immediately above.
+  assert(neighborAfterRemoval(order, "C")?.conversation_id === "B", "last picks above");
+  // Only item -> null.
+  assert(neighborAfterRemoval([a], "A") === null, "only item -> null");
+  // Not present -> null.
+  assert(neighborAfterRemoval(order, "Z") === null, "absent -> null");
 });
 
 console.log("\nconversationSort tests passed");

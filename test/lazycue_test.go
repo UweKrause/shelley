@@ -339,6 +339,41 @@ func TestNewPageQueueDrains(t *testing.T) {
 	lazyTest(t, `Navigate to /new. Type "delay: 10" into the message input (data-testid "message-input") and click the send button (data-testid "send-button"); wait for the thinking indicator (data-testid "agent-thinking") to become visible. Then type "echo: queued drain test" into the message input, click the split-button chevron (data-testid "send-options-button"), and click the queue option (data-testid "queue-option"); wait for the queued badge (data-testid "queued-badge") to become visible. Then wait (up to 30 seconds) for the first agent reply "Delayed for 10 seconds" to appear. After the agent finishes, the queued message drains and is processed: wait (up to 30 seconds) for the queued badge (data-testid "queued-badge") to no longer be visible, and wait (up to 30 seconds) for the echoed text "queued drain test" to appear on the page.`)
 }
 
+// --- Archive next-selection (regression for the drawer's filing-cabinet
+// button). When you archive the currently-selected conversation from the
+// conversation list, the app should select the conversation immediately BELOW
+// the archived one in the visible list; if it was the last item, the one
+// immediately ABOVE. The drawer computes that neighbor from the visible order
+// and App switches to it.
+//
+// Conversations sort newest-first, so the most recently created one is at the
+// TOP of the list. We create alpha, then bravo, so the visible order
+// top-to-bottom is bravo, alpha, and bravo is current. Archiving bravo should
+// select alpha (the conversation immediately below it).
+//
+// The reliable signal for "which conversation is selected" is the page URL
+// (each conversation has a distinct /c/<id> path); the per-row preview text
+// only refreshes on a full reload, so we don't depend on it. We stash each
+// conversation's URL in sessionStorage as we create it (sessionStorage, not a
+// window global, because creating each conversation starts from a full
+// navigate to /new which would wipe window state), then assert the URL after
+// archiving.
+//
+// Note on the flow: each conversation is created by navigating to /new (a fresh
+// composer) and sending the first message, which creates the conversation and
+// navigates the URL to /c/<id>. We deliberately use navigate /new rather than
+// the in-app "New Conversation" button so the steps are simple and
+// deterministic. ---
+
+func TestArchiveSelectsConversationBelow(t *testing.T) {
+	lazyTest(t, `This test verifies that archiving the current conversation selects the one immediately below it in the list. Conversations are listed newest-first.
+Step A — create conversation "alpha": navigate to /new, wait for the message input (data-testid "message-input") to be visible, fill it with "echo: alpha", and click the send button (data-testid "send-button"). Wait for the echoed text "alpha" to appear and for the URL to contain "/c/". Then run an eval step with expression "sessionStorage.setItem('alphaUrl', location.pathname)".
+Step B — create conversation "bravo": navigate to /new again, wait for the message input (data-testid "message-input") to be visible, fill it with "echo: bravo", and click the send button (data-testid "send-button"). Wait for the echoed text "bravo" to appear and for the URL to contain "/c/". Then run an eval step with expression "sessionStorage.setItem('bravoUrl', location.pathname)".
+Now "bravo" is the current conversation and is at the TOP of the list, with "alpha" immediately below it.
+Step C — open the conversation drawer by clicking the button with aria-label "Open conversations", and wait for the active conversation item (selector ".conversation-item.active") to be visible. Confirm the current URL is bravo's: run an eval step whose expression is "location.pathname === sessionStorage.getItem('bravoUrl') ? 'true' : 'false'" and expect the result "true".
+Step D — archive the active conversation. The archive button is a small icon button that a coordinate-based click can miss, so trigger it with an eval step whose expression is "document.querySelector(\".conversation-item.active button[aria-label='Archive']\").click()". After archiving, the app asynchronously selects the conversation immediately below bravo, which is alpha, and the URL changes to alpha's path. The selection update is not instantaneous, so add a sleep of about 2 seconds to let it settle before asserting. Then run an eval step whose expression is "location.pathname === sessionStorage.getItem('alphaUrl') ? 'true' : 'false'" and expect the result "true". Then run an eval step whose expression is "location.pathname === sessionStorage.getItem('bravoUrl') ? 'true' : 'false'" and expect the result "false".`)
+}
+
 // startPredictableServer boots a Shelley server in predictable mode backed by a
 // temp DB and the embedded UI. It returns the test server and a cleanup func.
 func startPredictableServer() (*httptest.Server, func()) {
