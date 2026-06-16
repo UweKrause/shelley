@@ -2,10 +2,12 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -50,6 +52,14 @@ func TestMain(m *testing.M) {
 
 	ts, cleanup := startPredictableServer()
 	defer cleanup()
+
+	// Prepare a deterministic git fixture for the diff-viewer test. The path
+	// must be stable so the LazyCue description (which embeds it) hashes to the
+	// same cache key across runs.
+	if err := setupDiffFixtureRepo(diffFixtureDir); err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(diffFixtureDir)
 
 	app = lazycue.New(lazycue.Options{
 		BaseURL:     ts.URL,
@@ -372,6 +382,91 @@ Step B — create conversation "bravo": navigate to /new again, wait for the mes
 Now "bravo" is the current conversation and is at the TOP of the list, with "alpha" immediately below it.
 Step C — open the conversation drawer by clicking the button with aria-label "Open conversations", and wait for the active conversation item (selector ".conversation-item.active") to be visible. Confirm the current URL is bravo's: run an eval step whose expression is "location.pathname === sessionStorage.getItem('bravoUrl') ? 'true' : 'false'" and expect the result "true".
 Step D — archive the active conversation. The archive button is a small icon button that a coordinate-based click can miss, so trigger it with an eval step whose expression is "document.querySelector(\".conversation-item.active button[aria-label='Archive']\").click()". After archiving, the app asynchronously selects the conversation immediately below bravo, which is alpha, and the URL changes to alpha's path. The selection update is not instantaneous, so add a sleep of about 2 seconds to let it settle before asserting. Then run an eval step whose expression is "location.pathname === sessionStorage.getItem('alphaUrl') ? 'true' : 'false'" and expect the result "true". Then run an eval step whose expression is "location.pathname === sessionStorage.getItem('bravoUrl') ? 'true' : 'false'" and expect the result "false".`)
+}
+
+// --- Diff viewer file list (regression for untracked/added files missing from
+// the sidebar/picker). The diff viewer can be opened directly via the URL query
+// params ?diff=working&cwd=<repo>. The file picker is a <select> with class
+// "diff-viewer-select" whose <option> labels are prefixed with a status symbol:
+// "+" for added, "~" for modified, "-" for deleted. `git diff --name-status
+// HEAD` omits untracked files, so brand-new files used to be missing from this
+// list; the handler now merges them in as "added". This is the same <select> on
+// mobile and desktop, so the assertion is viewport-independent. ---
+
+func TestDiffViewerListsAddedModifiedDeleted(t *testing.T) {
+	lazyTest(t, fmt.Sprintf(`Navigate to /new?diff=working&cwd=%s . This opens the git diff viewer for the working-tree changes of that repository. Wait for the file picker (a <select> element with selector "select.diff-viewer-select") to be visible. The working tree has exactly four changed files, each appearing as an <option> in that select with a status-symbol prefix: a modified file shown as "~ tracked_mod.txt", a deleted file shown as "- tracked_del.txt", a brand-new untracked file shown as "+ untracked_added.txt", and a modified committed file whose name contains a space shown as "~ spaced name.txt". Verify all four options are present, with their full untruncated paths, by running an eval step whose expression is "(() => { const opts = Array.from(document.querySelectorAll('select.diff-viewer-select option')).map(o => o.textContent.trim()); const has = (sym, name) => opts.some(t => t.startsWith(sym) && t.includes(name)); return has('+','untracked_added.txt') && has('~','tracked_mod.txt') && has('-','tracked_del.txt') && has('~','spaced name.txt') ? 'true' : 'false'; })()" and expect the result "true". Two regression cases matter here: the untracked (added) file must be present with the "+" prefix, and the committed file with a space must appear as the full "spaced name.txt" (not truncated at the space to "spaced").`, diffFixtureDir))
+}
+
+// diffFixtureDir is a deterministic path holding a git repo with working-tree
+// changes (a modified, a deleted, and a brand-new untracked file). The diff
+// viewer's file list is loaded from here. The path is stable so the LazyCue
+// description that references it hashes to a consistent cache key.
+var diffFixtureDir = filepath.Join(os.TempDir(), "shelley-lazycue-diff-fixture")
+
+// setupDiffFixtureRepo (re)creates a git repo at dir with three kinds of
+// working-tree change: a modified tracked file, a deleted tracked file, and a
+// brand-new untracked file. The untracked file is the regression target — it
+// must show up in the diff viewer's sidebar as an added file.
+func setupDiffFixtureRepo(dir string) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	run := func(args ...string) error {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%v: %w\n%s", args, err, out)
+		}
+		return nil
+	}
+	write := func(name, content string) error {
+		return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
+	}
+	for _, step := range [][]string{
+		{"git", "init"},
+		{"git", "config", "user.name", "Test"},
+		{"git", "config", "user.email", "test@test.com"},
+	} {
+		if err := run(step...); err != nil {
+			return err
+		}
+	}
+	if err := write("tracked_mod.txt", "one\ntwo\n"); err != nil {
+		return err
+	}
+	if err := write("tracked_del.txt", "remove me\n"); err != nil {
+		return err
+	}
+	// A committed file whose name contains a space. The handler used to split
+	// --name-status lines on whitespace, mangling this path so the file never
+	// rendered — even though it was part of the commit. It must come through
+	// intact.
+	if err := write("spaced name.txt", "alpha\n"); err != nil {
+		return err
+	}
+	if err := run("git", "add", "tracked_mod.txt", "tracked_del.txt", "spaced name.txt"); err != nil {
+		return err
+	}
+	if err := run("git", "commit", "-m", "fixture base\n\nPrompt: lazycue diff fixture"); err != nil {
+		return err
+	}
+	// Working-tree changes.
+	if err := write("tracked_mod.txt", "one\ntwo\nthree\n"); err != nil {
+		return err
+	}
+	if err := write("spaced name.txt", "alpha\nbeta\n"); err != nil {
+		return err
+	}
+	if err := run("git", "rm", "tracked_del.txt"); err != nil {
+		return err
+	}
+	if err := write("untracked_added.txt", "fresh\nuntracked\nlines\n"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // startPredictableServer boots a Shelley server in predictable mode backed by a

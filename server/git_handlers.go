@@ -235,6 +235,67 @@ func (s *Server) handleGitDiffs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// nameStatusEntry is one record from `git diff --name-status -z`: a status code
+// (e.g. "M", "A", "D", "R100") and the path to surface for it (the destination
+// path for renames/copies).
+type nameStatusEntry struct {
+	code string
+	path string
+}
+
+// parseNameStatusZ parses the NUL-separated output of
+// `git diff --name-status -z`. Tokens are NUL-terminated: a status field is
+// followed by one path for normal changes, or two paths (source then
+// destination) when the status starts with R (rename) or C (copy). Parsing the
+// raw byte stream this way keeps filenames containing spaces or tabs intact,
+// which splitting lines on whitespace did not.
+func parseNameStatusZ(s string) []nameStatusEntry {
+	tokens := strings.Split(s, "\x00")
+	var entries []nameStatusEntry
+	for i := 0; i < len(tokens); {
+		code := tokens[i]
+		if code == "" {
+			// Trailing empty token after the final NUL, or stray blank.
+			i++
+			continue
+		}
+		i++
+		if i >= len(tokens) {
+			break
+		}
+		// Renames and copies (R.../C...) carry a source and a destination
+		// path; everything else carries a single path. Surface the
+		// destination path so the file shows up under its current name.
+		if len(code) > 0 && (code[0] == 'R' || code[0] == 'C') {
+			if i+1 >= len(tokens) {
+				break
+			}
+			dst := tokens[i+1]
+			i += 2
+			entries = append(entries, nameStatusEntry{code: code, path: dst})
+			continue
+		}
+		path := tokens[i]
+		i++
+		entries = append(entries, nameStatusEntry{code: code, path: path})
+	}
+	return entries
+}
+
+// parseNumstatZ parses the additions/deletions from a single-file
+// `git diff --numstat -z` invocation. The numeric prefix is tab-separated
+// ("<adds>\t<dels>\t<path>"); binary files report "-" for both counts, which
+// yields zeros here.
+func parseNumstatZ(s string) (additions, deletions int) {
+	// The adds/dels are separated from each other (and the path) by tabs.
+	fields := strings.SplitN(s, "\t", 3)
+	if len(fields) >= 2 {
+		additions, _ = strconv.Atoi(strings.TrimSpace(fields[0]))
+		deletions, _ = strconv.Atoi(strings.TrimSpace(fields[1]))
+	}
+	return additions, deletions
+}
+
 // handleGitDiffFiles returns the files changed in a specific diff
 func (s *Server) handleGitDiffFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -274,7 +335,7 @@ func (s *Server) handleGitDiffFiles(w http.ResponseWriter, r *http.Request) {
 	var statHeadArg string // empty means "working tree"
 
 	if diffID == "working" {
-		cmd = exec.Command("git", "diff", "--name-status", "HEAD")
+		cmd = exec.Command("git", "diff", "--name-status", "-z", "HEAD")
 		statBaseArg = "HEAD"
 	} else {
 		parent := parentRef(gitRoot, diffID)
@@ -282,17 +343,17 @@ func (s *Server) handleGitDiffFiles(w http.ResponseWriter, r *http.Request) {
 		switch toRef {
 		case "", "working":
 			// Diff from parent to working tree (existing behavior).
-			cmd = exec.Command("git", "diff", "--name-status", parent)
+			cmd = exec.Command("git", "diff", "--name-status", "-z", parent)
 		case "self":
 			statHeadArg = diffID
-			cmd = exec.Command("git", "diff", "--name-status", parent, diffID)
+			cmd = exec.Command("git", "diff", "--name-status", "-z", parent, diffID)
 		default:
 			if !safeRef(toRef) {
 				http.Error(w, "invalid to parameter", http.StatusBadRequest)
 				return
 			}
 			statHeadArg = toRef
-			cmd = exec.Command("git", "diff", "--name-status", parent, toRef)
+			cmd = exec.Command("git", "diff", "--name-status", "-z", parent, toRef)
 		}
 	}
 	cmd.Dir = gitRoot
@@ -303,27 +364,30 @@ func (s *Server) handleGitDiffFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	// Parse the NUL-separated --name-status -z stream. Each record is a status
+	// field followed by one path (added/modified/deleted) or two paths
+	// (renames/copies, status like "R100"), every token NUL-terminated. Using
+	// -z (rather than splitting on whitespace) is what makes filenames with
+	// spaces or tabs come through intact.
+	statusEntries := parseNameStatusZ(string(output))
 	var files []GitFileInfo
 
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-
+	for _, e := range statusEntries {
 		status := "modified"
-		switch parts[0] {
-		case "A":
+		switch e.code[0] {
+		case 'A':
 			status = "added"
-		case "D":
+		case 'D':
 			status = "deleted"
-		case "M":
+		case 'R', 'C':
+			// Rename/copy: surface the new path as a modification so the
+			// file shows up under its current name.
+			status = "modified"
+		case 'M', 'T':
 			status = "modified"
 		}
+
+		path := e.path
 
 		// Get additions/deletions for this file.
 		// statHeadArg empty means compare statBaseArg to working tree.
@@ -331,40 +395,83 @@ func (s *Server) handleGitDiffFiles(w http.ResponseWriter, r *http.Request) {
 		if statHeadArg != "" {
 			statArgs = append(statArgs, statHeadArg)
 		}
-		statArgs = append(statArgs, "--numstat", "--", parts[1])
+		statArgs = append(statArgs, "--numstat", "-z", "--", path)
 		statCmd := exec.Command("git", statArgs...)
 		statCmd.Dir = gitRoot
 		statOutput, _ := statCmd.Output()
-		additions, deletions := 0, 0
-		if statOutput != nil {
-			statParts := strings.Fields(string(statOutput))
-			if len(statParts) >= 2 {
-				additions, _ = strconv.Atoi(statParts[0])
-				deletions, _ = strconv.Atoi(statParts[1])
-			}
-		}
+		additions, deletions := parseNumstatZ(string(statOutput))
 
 		// Check if file is autogenerated based on path.
 		// For Go files, we could also check content, but that requires reading the file
 		// which is more expensive. Path-based detection covers most cases.
-		isGenerated := IsAutogeneratedPath(parts[1])
+		isGenerated := IsAutogeneratedPath(path)
 
 		// For Go files that aren't obviously autogenerated by path,
 		// check the file content for autogeneration markers.
-		if !isGenerated && strings.HasSuffix(parts[1], ".go") && status != "deleted" {
-			fullPath := filepath.Join(gitRoot, parts[1])
+		if !isGenerated && strings.HasSuffix(path, ".go") && status != "deleted" {
+			fullPath := filepath.Join(gitRoot, path)
 			if content, err := os.ReadFile(fullPath); err == nil {
 				isGenerated = isAutogeneratedGoContent(content)
 			}
 		}
 
 		files = append(files, GitFileInfo{
-			Path:        parts[1],
+			Path:        path,
 			Status:      status,
 			Additions:   additions,
 			Deletions:   deletions,
 			IsGenerated: isGenerated,
 		})
+	}
+
+	// `git diff --name-status HEAD` only reports tracked changes, so
+	// brand-new (untracked) files never show up. For the working-tree
+	// view, merge in untracked files via `git ls-files` and mark them as
+	// added so they appear in the sidebar like any other change.
+	if diffID == "working" {
+		seen := make(map[string]bool, len(files))
+		for _, f := range files {
+			seen[f.Path] = true
+		}
+		untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard", "-z")
+		untrackedCmd.Dir = gitRoot
+		if untrackedOut, err := untrackedCmd.Output(); err == nil {
+			for _, path := range strings.Split(string(untrackedOut), "\x00") {
+				if path == "" || seen[path] {
+					continue
+				}
+				seen[path] = true
+
+				// Count additions by diffing /dev/null against the
+				// working-tree file. `git diff --no-index` exits
+				// non-zero when the files differ, which is expected.
+				additions := 0
+				statCmd := exec.Command("git", "diff", "--no-index", "--numstat", "--", os.DevNull, path)
+				statCmd.Dir = gitRoot
+				if statOutput, _ := statCmd.Output(); statOutput != nil {
+					statParts := strings.Fields(string(statOutput))
+					if len(statParts) >= 1 {
+						additions, _ = strconv.Atoi(statParts[0])
+					}
+				}
+
+				isGenerated := IsAutogeneratedPath(path)
+				if !isGenerated && strings.HasSuffix(path, ".go") {
+					fullPath := filepath.Join(gitRoot, path)
+					if content, err := os.ReadFile(fullPath); err == nil {
+						isGenerated = isAutogeneratedGoContent(content)
+					}
+				}
+
+				files = append(files, GitFileInfo{
+					Path:        path,
+					Status:      "added",
+					Additions:   additions,
+					Deletions:   0,
+					IsGenerated: isGenerated,
+				})
+			}
+		}
 	}
 
 	// Sort files: non-generated first (alphabetically), then generated (alphabetically)

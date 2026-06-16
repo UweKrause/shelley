@@ -911,3 +911,297 @@ func TestHandleGitDiffs_RefsAndMergeBase(t *testing.T) {
 		t.Errorf("expected IsMergeBase=false (no upstream), got true")
 	}
 }
+
+// TestHandleGitDiffFiles_UntrackedFiles verifies that brand-new (untracked)
+// files show up in the working-changes file list as "added", and that deleted
+// files show up as "deleted". `git diff --name-status HEAD` omits untracked
+// files, so the handler must merge in `git status` output.
+func TestHandleGitDiffFiles_UntrackedFiles(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	tempDir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = tempDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	run("git", "init")
+	run("git", "config", "user.name", "Test")
+	run("git", "config", "user.email", "test@test.com")
+
+	// Commit a couple of tracked files.
+	os.WriteFile(filepath.Join(tempDir, "kept.txt"), []byte("keep\n"), 0o644)
+	os.WriteFile(filepath.Join(tempDir, "gone.txt"), []byte("gone\n"), 0o644)
+	run("git", "add", "kept.txt", "gone.txt")
+	run("git", "commit", "-m", "init\n\nPrompt: test")
+
+	// Working changes: modify kept.txt, delete gone.txt, add a brand-new
+	// untracked file.
+	os.WriteFile(filepath.Join(tempDir, "kept.txt"), []byte("keep\nmore\n"), 0o644)
+	run("git", "rm", "gone.txt")
+	os.WriteFile(filepath.Join(tempDir, "brand_new.txt"), []byte("a\nb\nc\n"), 0o644)
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs/working/files?cwd=%s", tempDir), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffFiles(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var files []GitFileInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &files); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	byPath := map[string]GitFileInfo{}
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+
+	// The untracked file must be present and marked added with a +3 numstat.
+	newFile, ok := byPath["brand_new.txt"]
+	if !ok {
+		t.Fatalf("untracked file brand_new.txt missing from working diff; got %+v", files)
+	}
+	if newFile.Status != "added" {
+		t.Errorf("expected brand_new.txt status added, got %q", newFile.Status)
+	}
+	if newFile.Additions != 3 {
+		t.Errorf("expected brand_new.txt additions 3, got %d", newFile.Additions)
+	}
+
+	// The deleted file must be present and marked deleted.
+	goneFile, ok := byPath["gone.txt"]
+	if !ok {
+		t.Fatalf("deleted file gone.txt missing from working diff; got %+v", files)
+	}
+	if goneFile.Status != "deleted" {
+		t.Errorf("expected gone.txt status deleted, got %q", goneFile.Status)
+	}
+
+	// The modified file must still be present and marked modified.
+	keptFile, ok := byPath["kept.txt"]
+	if !ok {
+		t.Fatalf("modified file kept.txt missing from working diff; got %+v", files)
+	}
+	if keptFile.Status != "modified" {
+		t.Errorf("expected kept.txt status modified, got %q", keptFile.Status)
+	}
+
+	// No duplicates.
+	if len(files) != 3 {
+		t.Errorf("expected exactly 3 files, got %d: %+v", len(files), files)
+	}
+}
+
+// TestHandleGitDiffFiles_FilenamesWithSpaces verifies that committed files
+// whose names contain spaces are listed with their full path. The handler used
+// to split --name-status lines on any whitespace, which truncated
+// "my file.txt" to "my" and dropped its numstat, making it effectively
+// invisible in the diff viewer even though it was part of the commit.
+func TestHandleGitDiffFiles_FilenamesWithSpaces(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	tempDir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = tempDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	run("git", "init")
+	run("git", "config", "user.name", "Test")
+	run("git", "config", "user.email", "test@test.com")
+
+	os.WriteFile(filepath.Join(tempDir, "my file.txt"), []byte("one\n"), 0o644)
+	os.WriteFile(filepath.Join(tempDir, "normal.txt"), []byte("x\n"), 0o644)
+	run("git", "add", "my file.txt", "normal.txt")
+	run("git", "commit", "-m", "base\n\nPrompt: test")
+
+	// Second commit modifies both files.
+	os.WriteFile(filepath.Join(tempDir, "my file.txt"), []byte("one\ntwo\n"), 0o644)
+	os.WriteFile(filepath.Join(tempDir, "normal.txt"), []byte("x\ny\n"), 0o644)
+	run("git", "add", "my file.txt", "normal.txt")
+	run("git", "commit", "-m", "edit\n\nPrompt: test")
+	head := run("git", "rev-parse", "HEAD")
+
+	// Inspect the changes introduced by HEAD itself (to=self).
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs/%s/files?cwd=%s&to=self", head, tempDir), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffFiles(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var files []GitFileInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &files); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	byPath := map[string]GitFileInfo{}
+	for _, f := range files {
+		byPath[f.Path] = f
+	}
+
+	spaced, ok := byPath["my file.txt"]
+	if !ok {
+		t.Fatalf("committed file \"my file.txt\" missing or path-mangled; got %+v", files)
+	}
+	if spaced.Status != "modified" {
+		t.Errorf("expected \"my file.txt\" status modified, got %q", spaced.Status)
+	}
+	if spaced.Additions != 1 {
+		t.Errorf("expected \"my file.txt\" additions 1, got %d", spaced.Additions)
+	}
+	if _, ok := byPath["my"]; ok {
+		t.Errorf("path was truncated at the space: got bogus entry %q", "my")
+	}
+	if len(files) != 2 {
+		t.Errorf("expected exactly 2 files, got %d: %+v", len(files), files)
+	}
+}
+
+// TestHandleGitDiffFiles_RenamedFile verifies that a committed rename is listed
+// under the new path. The --name-status rename line is "R100\told\tnew"; the
+// old whitespace-splitting parser produced a bogus status and the wrong path.
+func TestHandleGitDiffFiles_RenamedFile(t *testing.T) {
+	t.Parallel()
+	h := NewTestHarness(t)
+
+	tempDir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = tempDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	run("git", "init")
+	run("git", "config", "user.name", "Test")
+	run("git", "config", "user.email", "test@test.com")
+
+	os.WriteFile(filepath.Join(tempDir, "old.txt"), []byte("content\n"), 0o644)
+	run("git", "add", "old.txt")
+	run("git", "commit", "-m", "base\n\nPrompt: test")
+
+	run("git", "mv", "old.txt", "new name.txt")
+	run("git", "commit", "-m", "rename\n\nPrompt: test")
+	head := run("git", "rev-parse", "HEAD")
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/git/diffs/%s/files?cwd=%s&to=self", head, tempDir), nil)
+	w := httptest.NewRecorder()
+	h.server.handleGitDiffFiles(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var files []GitFileInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &files); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected exactly 1 file for a rename, got %d: %+v", len(files), files)
+	}
+	if files[0].Path != "new name.txt" {
+		t.Errorf("expected renamed file path \"new name.txt\", got %q", files[0].Path)
+	}
+}
+
+// TestParseNameStatusZ covers the NUL-separated --name-status -z parser,
+// including renames (two paths) and filenames containing spaces and tabs.
+func TestParseNameStatusZ(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want []nameStatusEntry
+	}{
+		{"empty", "", nil},
+		{
+			"simple",
+			"M\x00normal.txt\x00",
+			[]nameStatusEntry{{code: "M", path: "normal.txt"}},
+		},
+		{
+			"space in name",
+			"M\x00my file.txt\x00",
+			[]nameStatusEntry{{code: "M", path: "my file.txt"}},
+		},
+		{
+			"tab in name",
+			"A\x00has\ttab.txt\x00",
+			[]nameStatusEntry{{code: "A", path: "has\ttab.txt"}},
+		},
+		{
+			"rename surfaces destination",
+			"R100\x00old.txt\x00new name.txt\x00",
+			[]nameStatusEntry{{code: "R100", path: "new name.txt"}},
+		},
+		{
+			"copy surfaces destination",
+			"C75\x00src.txt\x00copy.txt\x00",
+			[]nameStatusEntry{{code: "C75", path: "copy.txt"}},
+		},
+		{
+			"multiple mixed",
+			"M\x00a.txt\x00R100\x00b.txt\x00c d.txt\x00D\x00e.txt\x00",
+			[]nameStatusEntry{
+				{code: "M", path: "a.txt"},
+				{code: "R100", path: "c d.txt"},
+				{code: "D", path: "e.txt"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseNameStatusZ(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("parseNameStatusZ(%q) = %+v, want %+v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("entry %d = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestParseNumstatZ covers the per-file numstat parser, including binary files
+// (which report "-") and paths containing spaces.
+func TestParseNumstatZ(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		in             string
+		wantAdd, wantD int
+	}{
+		{"empty", "", 0, 0},
+		{"simple", "3\t1\tfile.txt\x00", 3, 1},
+		{"space in path", "2\t0\tmy file.txt\x00", 2, 0},
+		{"binary", "-\t-\timage.png\x00", 0, 0},
+		{"zero changes", "0\t0\tempty.txt\x00", 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			add, del := parseNumstatZ(tc.in)
+			if add != tc.wantAdd || del != tc.wantD {
+				t.Errorf("parseNumstatZ(%q) = (%d, %d), want (%d, %d)", tc.in, add, del, tc.wantAdd, tc.wantD)
+			}
+		})
+	}
+}
