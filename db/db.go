@@ -248,7 +248,7 @@ type ConversationHook struct {
 
 type ConversationOptions struct {
 	Type            string `json:"type,omitempty"`             // "normal" (default) or "orchestrator"
-	SubagentBackend string `json:"subagent_backend,omitempty"` // "shelley" (default), "claude-cli", "codex-cli"
+	SubagentBackend string `json:"subagent_backend,omitempty"` // "shelley" (default), "claude-cli", "codex-cli", "cursor-cli"
 	// ToolOverrides maps tool name to "on" or "off". Tools not listed use their default.
 	ToolOverrides map[string]string `json:"tool_overrides,omitempty"`
 	// DisableAllTools disables every tool by default; ToolOverrides with "on" re-enable individual tools.

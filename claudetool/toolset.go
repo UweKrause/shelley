@@ -139,7 +139,7 @@ type OrchestratorToolSetConfig struct {
 	// EnableBrowser enables browser tools (for read_image / screenshot viewing).
 	EnableBrowser bool
 	// CLIAgent, if non-empty, uses a CLI subagent tool instead of native subagent.
-	// Valid values: "claude-cli", "codex-cli".
+	// Valid values: "claude-cli", "codex-cli", "cursor-cli".
 	CLIAgent string
 	// ToolOverrides maps tool name to "on" or "off". Tools not listed use their default.
 	ToolOverrides map[string]string

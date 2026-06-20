@@ -764,7 +764,7 @@ interface ChatInterfaceProps {
     model: string,
     cwd?: string,
     conversationType?: "normal" | "orchestrator",
-    subagentBackend?: "shelley" | "claude-cli" | "codex-cli",
+    subagentBackend?: "shelley" | "claude-cli" | "codex-cli" | "cursor-cli",
     toolOverrides?: Record<string, "on" | "off">,
     thinkingLevel?: ThinkingLevel,
   ) => Promise<void>;
@@ -1170,7 +1170,7 @@ function ChatInterface({
   const [toolProgress, setToolProgress] = useState<Record<string, ToolProgress>>({});
   // Streaming LLM text: accumulated text from stream deltas
   const [streamingText, setStreamingText] = useState("");
-  const [subagentBackend, setSubagentBackend] = useState<"shelley" | "claude-cli" | "codex-cli">(
+  const [subagentBackend, setSubagentBackend] = useState<"shelley" | "claude-cli" | "codex-cli" | "cursor-cli">(
     "shelley",
   );
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
@@ -2849,7 +2849,7 @@ function ChatInterface({
                               value={subagentBackend}
                               onChange={(e) =>
                                 setSubagentBackend(
-                                  e.target.value as "shelley" | "claude-cli" | "codex-cli",
+                                  e.target.value as "shelley" | "claude-cli" | "codex-cli" | "cursor-cli",
                                 )
                               }
                               disabled={sending}
@@ -2860,6 +2860,9 @@ function ChatInterface({
                               )}
                               {cliAgents.includes("codex-cli") && (
                                 <option value="codex-cli">Codex CLI</option>
+                              )}
+                              {cliAgents.includes("cursor-cli") && (
+                                <option value="cursor-cli">Cursor Agent</option>
                               )}
                             </select>
                           </div>

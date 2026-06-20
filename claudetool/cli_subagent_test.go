@@ -51,6 +51,18 @@ func TestCLISubagentTool_CodexDescription(t *testing.T) {
 	}
 }
 
+func TestCLISubagentTool_CursorDescription(t *testing.T) {
+	tool := &CLISubagentTool{
+		CLIAgent:   "cursor-cli",
+		WorkingDir: NewMutableWorkingDir("/tmp"),
+	}
+
+	llmTool := tool.Tool()
+	if !strings.Contains(llmTool.Description, "Cursor Agent") {
+		t.Error("expected description to mention Cursor Agent")
+	}
+}
+
 func TestCLISubagentTool_Validation(t *testing.T) {
 	tool := &CLISubagentTool{
 		CLIAgent:   "claude-cli",

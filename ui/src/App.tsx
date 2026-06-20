@@ -717,7 +717,7 @@ function App() {
     model: string,
     cwd?: string,
     conversationType?: "normal" | "orchestrator",
-    subagentBackend?: "shelley" | "claude-cli" | "codex-cli",
+    subagentBackend?: "shelley" | "claude-cli" | "codex-cli" | "cursor-cli",
     toolOverrides?: Record<string, "on" | "off">,
     thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
   ) => {

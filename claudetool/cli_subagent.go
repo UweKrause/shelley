@@ -11,9 +11,9 @@ import (
 	"shelley.exe.dev/llm"
 )
 
-// CLISubagentTool delegates work to an external CLI agent (claude or codex).
+// CLISubagentTool delegates work to an external CLI agent (claude, codex, or cursor).
 type CLISubagentTool struct {
-	CLIAgent   string // "claude-cli" or "codex-cli"
+	CLIAgent   string // "claude-cli", "codex-cli", or "cursor-cli"
 	WorkingDir *MutableWorkingDir
 }
 
@@ -34,6 +34,8 @@ func (t *CLISubagentTool) cliAgentDisplayName() string {
 		return "Claude CLI"
 	case "codex-cli":
 		return "Codex CLI"
+	case "cursor-cli":
+		return "Cursor Agent"
 	default:
 		return t.CLIAgent
 	}
@@ -119,6 +121,9 @@ func (t *CLISubagentTool) run(ctx context.Context, req cliSubagentInput) llm.Too
 	case "codex-cli":
 		cmdName = "codex"
 		cmdArgs = []string{"exec", "--full-auto", req.Prompt}
+	case "cursor-cli":
+		cmdName = "cursor-agent"
+		cmdArgs = []string{"-p", "--trust", "--force", "--output-format", "text", req.Prompt}
 	default:
 		return llm.ErrorfToolOut("unsupported CLI agent: %s", t.CLIAgent)
 	}

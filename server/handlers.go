@@ -36,7 +36,7 @@ import (
 )
 
 // detectCLIAgents checks which CLI agent binaries are available in PATH.
-// Returns a list of agent identifiers (e.g., "claude-cli", "codex-cli").
+// Returns a list of agent identifiers (e.g., "claude-cli", "codex-cli", "cursor-cli").
 func detectCLIAgents() []string {
 	var agents []string
 	if _, err := exec.LookPath("claude"); err == nil {
@@ -44,6 +44,9 @@ func detectCLIAgents() []string {
 	}
 	if _, err := exec.LookPath("codex"); err == nil {
 		agents = append(agents, "codex-cli")
+	}
+	if _, err := exec.LookPath("cursor-agent"); err == nil {
+		agents = append(agents, "cursor-cli")
 	}
 	return agents
 }
@@ -3088,8 +3091,8 @@ func validateConversationOptions(opts db.ConversationOptions) string {
 	if opts.Type != "" && opts.Type != "normal" && opts.Type != "orchestrator" {
 		return fmt.Sprintf("Invalid conversation options type: %s", opts.Type)
 	}
-	if opts.SubagentBackend != "" && opts.SubagentBackend != "shelley" && opts.SubagentBackend != "claude-cli" && opts.SubagentBackend != "codex-cli" {
-		return fmt.Sprintf("Invalid subagent_backend: %s; must be one of: shelley, claude-cli, codex-cli", opts.SubagentBackend)
+	if opts.SubagentBackend != "" && opts.SubagentBackend != "shelley" && opts.SubagentBackend != "claude-cli" && opts.SubagentBackend != "codex-cli" && opts.SubagentBackend != "cursor-cli" {
+		return fmt.Sprintf("Invalid subagent_backend: %s; must be one of: shelley, claude-cli, codex-cli, cursor-cli", opts.SubagentBackend)
 	}
 	for name, v := range opts.ToolOverrides {
 		if v != "on" && v != "off" {

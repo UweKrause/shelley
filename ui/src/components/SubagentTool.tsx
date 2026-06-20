@@ -43,9 +43,15 @@ function SubagentTool({
   const timeout = input.timeout_seconds || 60;
 
   // Detect CLI agent backend from display data
-  const cliAgent = displayData?.cli_agent; // "claude-cli" or "codex-cli"
+  const cliAgent = displayData?.cli_agent;
   const cliAgentLabel =
-    cliAgent === "claude-cli" ? "Claude CLI" : cliAgent === "codex-cli" ? "Codex CLI" : null;
+    cliAgent === "claude-cli"
+      ? "Claude CLI"
+      : cliAgent === "codex-cli"
+        ? "Codex CLI"
+        : cliAgent === "cursor-cli"
+          ? "Cursor Agent"
+          : null;
 
   // Extract result text
   const resultText =
