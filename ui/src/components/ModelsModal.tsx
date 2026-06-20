@@ -66,6 +66,7 @@ const API_TYPE_LABELS: Record<string, string> = {
   "openai-chat-completions": "OpenAI (Chat API)",
   "openai-responses": "OpenAI (Responses API)",
   gemini: "Google Gemini",
+  "cursor-agent": "Cursor Agent",
   builtin: "Built-in",
 };
 

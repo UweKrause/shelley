@@ -15,6 +15,7 @@ import (
 	"shelley.exe.dev/claudetool"
 	"shelley.exe.dev/client"
 	"shelley.exe.dev/db"
+	"shelley.exe.dev/llm/cursor"
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/models"
 	"shelley.exe.dev/modelsources"
@@ -392,17 +393,26 @@ func buildLLMConfig(global GlobalConfig, logger *slog.Logger, database *db.DB) *
 	defaultModel, sources := buildLLMModelSources(context.Background(), global, logger)
 
 	httpc := llmhttp.NewClient(nil)
+	catalog := buildModelCatalog(context.Background(), logger)
 	return &server.LLMConfig{
-		Models:       modelsources.Build(models.All(), sources, httpc, logger),
+		Models:       modelsources.Build(catalog, sources, httpc, logger),
 		DefaultModel: defaultModel,
 		DB:           database,
 		HTTPC:        httpc,
 		RefreshBuiltModels: func(ctx context.Context) ([]models.Built, error) {
 			_, sources := buildLLMModelSources(ctx, global, logger)
-			return modelsources.Build(models.All(), sources, httpc, logger), nil
+			return modelsources.Build(buildModelCatalog(ctx, logger), sources, httpc, logger), nil
 		},
 		Logger: logger,
 	}
+}
+
+func buildModelCatalog(ctx context.Context, logger *slog.Logger) []models.Model {
+	catalog := models.All()
+	if cursorModels := models.DiscoverCursorModels(ctx, logger); len(cursorModels) > 0 {
+		catalog = append(cursorModels, catalog...)
+	}
+	return catalog
 }
 
 func buildLLMModelSources(ctx context.Context, global GlobalConfig, logger *slog.Logger) (string, []modelsources.Source) {
@@ -412,6 +422,7 @@ func buildLLMModelSources(ctx context.Context, global GlobalConfig, logger *slog
 	openAIKey := os.Getenv("OPENAI_API_KEY")
 	geminiKey := os.Getenv("GEMINI_API_KEY")
 	fireworksKey := os.Getenv("FIREWORKS_API_KEY")
+	cursorKey := os.Getenv("CURSOR_API_KEY")
 
 	var sources []modelsources.Source
 
@@ -477,7 +488,20 @@ func buildLLMModelSources(ctx context.Context, global GlobalConfig, logger *slog
 		sources = append(sources, modelsources.Env(anthropicKey, openAIKey, geminiKey, fireworksKey))
 	}
 
-	// 4. Predictable always available.
+	// 4. Cursor Agent (cursor-agent on PATH and/or CURSOR_API_KEY).
+	if cursor.Available() || cursorKey != "" {
+		sources = append(sources, modelsources.Cursor(cursorKey))
+		catalog := buildModelCatalog(ctx, logger)
+		if preferred := models.PreferredCursorModelID(catalog); preferred != "" {
+			hasDirectProviders := anthropicKey != "" || openAIKey != "" || geminiKey != "" || fireworksKey != "" || gateway != ""
+			if !hasDirectProviders && !llmIntegrationFound && defaultModel == models.Default().ID {
+				defaultModel = preferred
+				logger.Info("Using Cursor as default model", "model", preferred)
+			}
+		}
+	}
+
+	// 5. Predictable always available.
 	sources = append(sources, modelsources.Predictable())
 	return defaultModel, sources
 }

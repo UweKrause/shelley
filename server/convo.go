@@ -18,6 +18,7 @@ import (
 	"shelley.exe.dev/llm"
 	"shelley.exe.dev/llm/llmhttp"
 	"shelley.exe.dev/loop"
+	"shelley.exe.dev/models"
 	"shelley.exe.dev/subpub"
 )
 
@@ -1298,6 +1299,14 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	history, system := cm.partitionMessages(dbMessages)
 	cm.logSystemPromptState(system, len(dbMessages))
 
+	service = models.BindConversationLLM(service, modelID, conversationID, cwd, conversationOpts.CursorSessionID, func(id string) error {
+		conversationOpts.CursorSessionID = id
+		cm.mu.Lock()
+		cm.conversationOptions = conversationOpts
+		cm.mu.Unlock()
+		return database.UpdateConversationOptions(context.Background(), conversationID, conversationOpts)
+	})
+
 	// Create tools for this conversation with the conversation's working directory
 	toolSetConfig.WorkingDir = cwd
 	toolSetConfig.ModelID = modelID
@@ -1365,11 +1374,17 @@ func (cm *ConversationManager) ensureLoop(service llm.Service, modelID string) e
 	// of individual deltas per second from the Anthropic SSE stream.
 	sf := newStreamFlusher(cm, 50*time.Millisecond)
 
+	loopTools := toolSet.Tools()
+	if models.IsCursorModel(modelID) {
+		loopTools = nil
+	}
+
 	loopInstance := loop.NewLoop(loop.Config{
-		LLM:           service,
-		History:       history,
-		Tools:         toolSet.Tools(),
-		ThinkingLevel: llm.ParseThinkingLevel(conversationOpts.ThinkingLevel),
+		LLM:              service,
+		History:          history,
+		Tools:            loopTools,
+		ConversationID:   conversationID,
+		ThinkingLevel:    llm.ParseThinkingLevel(conversationOpts.ThinkingLevel),
 		RecordMessage: recordMessage,
 		RecordWarning: func(ctx context.Context, text string) error {
 			return cm.recordWarning(ctx, text)

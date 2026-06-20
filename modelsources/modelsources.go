@@ -94,6 +94,21 @@ func Gateway(gatewayURL, anthropicKey, openAIKey, fireworksKey string) Source {
 	}
 }
 
+// Cursor returns a Source for models backed by cursor-agent. apiKey may be
+// empty when the CLI is authenticated via cursor login.
+func Cursor(apiKey string) Source {
+	label := "cursor login"
+	if apiKey != "" {
+		label = "$CURSOR_API_KEY"
+	}
+	return Source{
+		label: label,
+		providers: map[models.Provider]*providerConn{
+			models.ProviderCursor: {apiKey: apiKey},
+		},
+	}
+}
+
 // Env returns a Source for direct-to-provider env-var credentials. Only
 // providers with a non-empty key are included.
 func Env(anthropicKey, openAIKey, geminiKey, fireworksKey string) Source {

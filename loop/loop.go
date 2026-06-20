@@ -51,6 +51,9 @@ type Config struct {
 	// before the assistant message is recorded. Use this to flush any
 	// buffered stream deltas so they reach the UI before the full message.
 	OnStreamDone func()
+	// ConversationID is passed through to llm.Request for providers that
+	// maintain per-conversation state (e.g. cursor-agent sessions).
+	ConversationID string
 }
 
 // Loop manages a conversation turn with an LLM including tool execution and message recording.
@@ -74,6 +77,7 @@ type Loop struct {
 	onStreamDelta    func(llm.StreamDelta)
 	onStreamDone     func()
 	thinkingLevel    llm.ThinkingLevel
+	conversationID   string
 	notify           chan struct{} // signaled when a message is queued or retry requested
 	retryPending     bool          // set by Retry() to re-run processLLMRequest with current history
 }
@@ -109,6 +113,7 @@ func NewLoop(config Config) *Loop {
 		onStreamDelta:    config.OnStreamDelta,
 		onStreamDone:     config.OnStreamDone,
 		thinkingLevel:    config.ThinkingLevel,
+		conversationID:   config.ConversationID,
 		notify:           make(chan struct{}, 1),
 	}
 }
@@ -294,12 +299,14 @@ func (l *Loop) processLLMRequest(ctx context.Context) error {
 		}
 
 		req := &llm.Request{
-			Messages:      messages,
-			Tools:         tools,
-			System:        system,
-			ThinkingLevel: l.thinkingLevel,
-			OnStream:      l.onStreamDelta,
-			OnRetry:       l.recordRetryWarning(ctx),
+			Messages:       messages,
+			Tools:          tools,
+			System:         system,
+			ThinkingLevel:  l.thinkingLevel,
+			OnStream:       l.onStreamDelta,
+			OnRetry:        l.recordRetryWarning(ctx),
+			ConversationID: l.conversationID,
+			WorkingDir:     l.workingDir,
 		}
 
 		// Insert missing tool results if the previous message had tool_use blocks

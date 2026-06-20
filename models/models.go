@@ -27,6 +27,7 @@ const (
 	ProviderAnthropic Provider = "anthropic"
 	ProviderFireworks Provider = "fireworks"
 	ProviderGemini    Provider = "gemini"
+	ProviderCursor    Provider = "cursor"
 	ProviderBuiltIn   Provider = "builtin"
 )
 
@@ -54,6 +55,7 @@ const (
 	APITypeOpenAIResponses   APIType = "openai-responses"
 	APITypeOpenAIChat        APIType = "openai-chat-completions"
 	APITypeGemini            APIType = "gemini"
+	APITypeCursor            APIType = "cursor-agent"
 	APITypeBuiltIn           APIType = "builtin"
 )
 

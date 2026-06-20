@@ -96,6 +96,9 @@ type Request struct {
 	// OnStream is called with each streaming delta as the LLM generates content.
 	// If nil, no streaming callbacks are made. The full response is still returned from Do.
 	OnStream func(StreamDelta) `json:"-"`
+	// ConversationID and WorkingDir are optional hints for providers (e.g. cursor).
+	ConversationID string `json:"-"`
+	WorkingDir     string `json:"-"`
 	// OnRetry is called before sleeping for a retryable LLM request failure.
 	OnRetry func(RetryEvent) `json:"-"`
 }
